@@ -1,0 +1,11 @@
+.env
+.jobs/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+docs/evaluation/*.local.json
+.DS_Store
+Thumbs.db

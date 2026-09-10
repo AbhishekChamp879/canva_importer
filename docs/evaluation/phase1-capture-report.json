@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-28T16:22:55Z",
+  "evaluationStage": "live-capture",
+  "caseCount": 5,
+  "pageCount": 106,
+  "passedCases": 5,
+  "passed": true,
+  "finalEditableAcceptance": false,
+  "cases": [
+    {
+      "category": "presentation",
+      "sourceFingerprint": "4a27a4cb05c6d6d0af6e4d4aca3616900e843b18cea0428ebbd1a98b8f5fdebb",
+      "pageCount": 40,
+      "width": 1920,
+      "height": 1080,
+      "orientation": "landscape",
+      "uniqueImageCount": 36,
+      "duplicateImageCount": 4,
+      "passed": true
+    },
+    {
+      "category": "poster",
+      "sourceFingerprint": "04338c11dd50871a322850da5241773d4983b73f1df506f80bc47638adb4da1e",
+      "pageCount": 13,
+      "width": 1920,
+      "height": 1080,
+      "orientation": "landscape",
+      "uniqueImageCount": 13,
+      "duplicateImageCount": 0,
+      "passed": true
+    },
+    {
+      "category": "social-post",
+      "sourceFingerprint": "59254fdc073ce45027501d43df2340a93c240584fbd7d1c5dfc781c2097fbd2c",
+      "pageCount": 18,
+      "width": 794,
+      "height": 1123,
+      "orientation": "portrait",
+      "uniqueImageCount": 18,
+      "duplicateImageCount": 0,
+      "passed": true
+    },
+    {
+      "category": "flyer",
+      "sourceFingerprint": "61ce27615b8495f516d8471011e8d0c1d906f02c24ed1e4a467ae2a39ce2f63e",
+      "pageCount": 10,
+      "width": 1920,
+      "height": 1080,
+      "orientation": "landscape",
+      "uniqueImageCount": 10,
+      "duplicateImageCount": 0,
+      "passed": true
+    },
+    {
+      "category": "multi-page",
+      "sourceFingerprint": "9359741502db80f847188e4ff15c166a0d901c957565051d3ceab8b282ad2ca8",
+      "pageCount": 25,
+      "width": 1920,
+      "height": 1080,
+      "orientation": "landscape",
+      "uniqueImageCount": 25,
+      "duplicateImageCount": 0,
+      "passed": true
+    }
+  ]
+}

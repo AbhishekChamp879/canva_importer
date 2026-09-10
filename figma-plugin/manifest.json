@@ -1,0 +1,16 @@
+{
+  "name": "Canva to Editable Figma",
+  "id": "canva-to-editable-figma-local",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": [
+      "http://localhost:3000"
+    ],
+    "reasoning": "The development plugin connects only to the local Flask converter service."
+  }
+}

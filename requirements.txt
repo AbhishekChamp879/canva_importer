@@ -1,0 +1,4 @@
+Flask>=3.1,<4
+Pillow>=11,<12
+playwright>=1.54,<2
+pydantic>=2.10,<3

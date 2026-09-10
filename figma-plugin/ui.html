@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canva to Editable Figma</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--figma-color-bg, #ffffff);
+      --surface: var(--figma-color-bg-secondary, #f5f5f5);
+      --border: var(--figma-color-border, #d6d6d6);
+      --text: var(--figma-color-text, #1e1e1e);
+      --muted: var(--figma-color-text-secondary, #666666);
+      --brand: var(--figma-color-bg-brand, #0d99ff);
+      --brand-text: var(--figma-color-text-onbrand, #ffffff);
+      --danger: var(--figma-color-text-danger, #d92d20);
+      --success: #12a66a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 12px/1.45 Inter, system-ui, sans-serif; }
+    button, input, select { font: inherit; }
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0 0 4px; font-size: 18px; line-height: 1.25; }
+    header p, .hint { margin: 0; color: var(--muted); }
+    main { flex: 1; padding: 16px 20px; overflow: auto; }
+    .panel { padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+    .label-row, .button-row, .preview-head, .progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    label.title { display: block; margin-bottom: 7px; font-weight: 600; }
+    input[type="url"], input[type="search"], select { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); outline: none; }
+    input[type="url"]:focus { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+    .input-action { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    button { min-height: 32px; border: 1px solid var(--border); border-radius: 6px; padding: 0 12px; color: var(--text); background: var(--bg); cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--brand); }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    button.primary { border-color: var(--brand); color: var(--brand-text); background: var(--brand); font-weight: 600; }
+    button.danger { color: var(--danger); }
+    .pages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 10px; }
+    .page-card { position: relative; display: block; padding: 7px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer; }
+    .page-card:has(input:checked) { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+    .page-card img { display: block; width: 100%; height: 105px; object-fit: contain; border-radius: 4px; background: #ececec; }
+    .page-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    .page-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .selection-actions { margin-top: 10px; }
+    .import-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+    .progress-track { height: 6px; overflow: hidden; margin: 9px 0 8px; border-radius: 99px; background: var(--border); }
+    .progress-bar { width: 0; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease; }
+    .activity { max-height: 115px; overflow: auto; margin: 8px 0 0; padding: 9px; border-radius: 6px; background: var(--bg); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+    .error { color: var(--danger); }
+    .success { color: var(--success); }
+    .hidden { display: none !important; }
+    footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
+    .summary { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+    .oauth-status { display: flex; align-items: center; gap: 7px; margin: 8px 0; color: var(--muted); }
+    .oauth-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+    .oauth-dot.connected { background: var(--success); }
+    .oauth-controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Canva → Figma</h1>
+      <p>Import every detected Canva page · editable AI is optional</p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <label class="title" for="canva-url">Canva design or share URL</label>
+        <div class="input-action">
+          <input id="canva-url" type="url" placeholder="Canva /view, /edit, /present, or canva.link URL" autocomplete="off">
+          <button id="preview" class="primary" type="button">Load pages</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="label-row">
+          <strong>Connect Canva (trial)</strong>
+          <button id="canva-connect" type="button">Connect Canva</button>
+        </div>
+        <div class="oauth-status"><span id="canva-oauth-dot" class="oauth-dot"></span><span id="canva-oauth-status">Checking configuration…</span></div>
+        <div id="canva-design-controls" class="hidden">
+          <div class="oauth-controls">
+            <input id="canva-design-search" type="search" maxlength="100" placeholder="Search your Canva designs">
+            <button id="canva-design-search-button" type="button">Search</button>
+          </div>
+          <div class="oauth-controls">
+            <select id="canva-design-select" aria-label="Canva design"><option value="">Choose a Canva design</option></select>
+            <button id="canva-design-load" class="primary" type="button">Load</button>
+          </div>
+          <p class="hint" style="margin-top:8px">OAuth uses Canva’s official PNG export. It supports private designs available to the connected account.</p>
+        </div>
+      </section>
+
+      <section id="preview-panel" class="panel hidden">
+        <div class="preview-head">
+          <div>
+            <strong id="design-title">Captured design</strong>
+            <div id="page-count" class="hint"></div>
+          </div>
+          <button id="toggle-pages" type="button">Clear all</button>
+        </div>
+        <div id="pages" class="pages"></div>
+        <div class="button-row selection-actions">
+          <span id="selected-count" class="hint">0 selected</span>
+        </div>
+        <div class="import-actions">
+          <button id="import-images" class="primary" type="button">Import page images</button>
+          <button id="reconstruct" type="button">Make editable (AI)</button>
+        </div>
+        <p class="hint" style="margin-top:8px">Page images preserve the exact appearance. AI reconstruction creates editable layers but may differ from Canva.</p>
+      </section>
+
+      <section id="job-panel" class="panel hidden">
+        <div class="progress-head">
+          <strong id="job-status">Queued</strong>
+          <span id="job-percent">0%</span>
+        </div>
+        <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+        <div class="button-row">
+          <span id="job-message" class="hint">Waiting for the converter…</span>
+          <button id="cancel-job" class="danger" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="label-row">
+          <strong>Activity</strong>
+          <span id="activity-state" class="hint">Idle</span>
+        </div>
+        <div id="activity" class="activity" role="status" aria-live="polite">Ready.</div>
+        <ul id="summary" class="summary hidden"></ul>
+      </section>
+    </main>
+
+    <footer>
+      <button id="close" type="button">Close</button>
+    </footer>
+  </div>
+
+  <script>
+    "use strict";
+
+    const elements = Object.fromEntries([
+      "canva-url", "preview",
+      "canva-connect", "canva-oauth-dot", "canva-oauth-status", "canva-design-controls",
+      "canva-design-search", "canva-design-search-button", "canva-design-select", "canva-design-load",
+      "preview-panel", "design-title", "page-count", "pages", "toggle-pages", "selected-count", "import-images",
+      "reconstruct", "job-panel", "job-status", "job-percent", "progress-bar", "job-message",
+      "cancel-job", "activity", "activity-state", "summary", "close"
+    ].map(id => [id, document.getElementById(id)]));
+
+    let capture = null;
+    let activeCaptureJobId = null;
+    let activeJobId = null;
+    let activeImageImport = null;
+    let renderingDocument = false;
+    let renderTimer = null;
+    let imagePluginWaiter = null;
+    let capturePollTimer = null;
+    let pollTimer = null;
+    let oauthPollTimer = null;
+    let oauthPollDeadline = 0;
+    const figmaQaComparisons = new Map();
+
+    const BACKEND_BASE = "http://localhost:3000";
+
+    function backendBase() {
+      return BACKEND_BASE;
+    }
+
+    async function api(path, options) {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(`${backendBase()}${path}`, {
+          ...options,
+          signal: controller.signal,
+          headers: { "Content-Type": "application/json", ...((options && options.headers) || {}) },
+        });
+        let payload = null;
+        try { payload = await response.json(); } catch (_error) { /* handled below */ }
+        if (!response.ok) {
+          const detail = payload && payload.error;
+          const error = new Error(detail && detail.message ? detail.message : `Converter returned HTTP ${response.status}.`);
+          error.code = detail && detail.code ? detail.code : "HTTP_ERROR";
+          throw error;
+        }
+        return payload;
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          const timeout = new Error("The converter did not respond within 30 seconds.");
+          timeout.code = "REQUEST_TIMEOUT";
+          throw timeout;
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+      }
+    }
+
+    function setActivity(message, state, isError) {
+      elements.activity.textContent = message;
+      elements["activity-state"].textContent = state || "Working";
+      elements.activity.classList.toggle("error", Boolean(isError));
+      elements.activity.classList.toggle("success", state === "Completed");
+    }
+
+    function setCaptureBusy(busy) {
+      elements.preview.disabled = busy;
+      elements["canva-url"].disabled = busy;
+      elements["canva-design-load"].disabled = busy || !elements["canva-design-select"].value;
+      elements["canva-design-search-button"].disabled = busy;
+      elements["canva-design-select"].disabled = busy;
+    }
+
+    async function refreshCanvaOAuthStatus(options = {}) {
+      try {
+        const status = await api("/api/canva/oauth/status");
+        elements["canva-oauth-dot"].classList.toggle("connected", Boolean(status.connected));
+        elements["canva-design-controls"].classList.toggle("hidden", !status.connected);
+        elements["canva-connect"].textContent = status.connected ? "Disconnect" : "Connect Canva";
+        elements["canva-connect"].disabled = !status.configured;
+        elements["canva-oauth-status"].textContent = !status.configured
+          ? "OAuth not configured in the converter"
+          : status.connected ? "Connected through Canva OAuth" : "Not connected";
+        if (status.connected && options.loadDesigns) await loadCanvaDesigns();
+        return status;
+      } catch (error) {
+        elements["canva-oauth-status"].textContent = "Converter unavailable";
+        elements["canva-connect"].disabled = true;
+        return { configured: false, connected: false };
+      }
+    }
+
+    async function connectCanva() {
+      const status = await refreshCanvaOAuthStatus();
+      if (status.connected) {
+        await api("/api/canva/oauth/disconnect", { method: "DELETE" });
+        elements["canva-design-select"].replaceChildren(new Option("Choose a Canva design", ""));
+        await refreshCanvaOAuthStatus();
+        setActivity("Canva account disconnected. Public-link import remains available.", "Disconnected");
+        return;
+      }
+      try {
+        const result = await api("/api/canva/oauth/start", { method: "POST", body: "{}" });
+        if (!result.authorizationUrl || !result.authorizationUrl.startsWith("https://www.canva.com/api/oauth/authorize?")) {
+          throw new Error("Converter returned an invalid Canva authorization URL.");
+        }
+        parent.postMessage({ pluginMessage: { type: "open-external", url: result.authorizationUrl } }, "*");
+        oauthPollDeadline = Date.now() + 120000;
+        elements["canva-connect"].disabled = true;
+        setActivity("Approve access in the Canva browser tab. This plugin will update automatically.", "Waiting for Canva");
+        pollCanvaConnection();
+      } catch (error) {
+        setActivity(`${error.code || "CANVA_OAUTH_FAILED"}: ${error.message}`, "Connection failed", true);
+      }
+    }
+
+    async function pollCanvaConnection() {
+      if (oauthPollTimer) window.clearTimeout(oauthPollTimer);
+      const status = await refreshCanvaOAuthStatus();
+      if (status.connected) {
+        elements["canva-connect"].disabled = false;
+        await loadCanvaDesigns();
+        setActivity("Canva connected. Select one of your designs below.", "Canva connected");
+        return;
+      }
+      if (Date.now() >= oauthPollDeadline) {
+        elements["canva-connect"].disabled = false;
+        setActivity("Canva authorization was not completed within two minutes.", "Connection timed out", true);
+        return;
+      }
+      oauthPollTimer = window.setTimeout(pollCanvaConnection, 1000);
+    }
+
+    async function loadCanvaDesigns() {
+      const query = elements["canva-design-search"].value.trim();
+      elements["canva-design-search-button"].disabled = true;
+      try {
+        const result = await api(`/api/canva/designs${query ? `?query=${encodeURIComponent(query)}` : ""}`);
+        const select = elements["canva-design-select"];
+        select.replaceChildren(new Option("Choose a Canva design", ""));
+        for (const design of result.items || []) {
+          if (!design || typeof design.id !== "string") continue;
+          const count = Number.isInteger(design.pageCount) ? ` · ${design.pageCount} page${design.pageCount === 1 ? "" : "s"}` : "";
+          const types = Array.isArray(design.designTypes) ? design.designTypes : [];
+          const unsupported = types.some(type => ["doc", "whiteboard", "sheet", "video"].includes(type));
+          const option = new Option(`${design.title || "Untitled Canva design"}${count}${unsupported ? " · unsupported type" : ""}`, design.id);
+          option.disabled = unsupported;
+          select.append(option);
+        }
+        elements["canva-design-load"].disabled = true;
+        if (!(result.items || []).length) setActivity("No Canva designs matched this search.", "No designs");
+      } catch (error) {
+        setActivity(`${error.code || "CANVA_API_FAILED"}: ${error.message}`, "Design list failed", true);
+      } finally {
+        elements["canva-design-search-button"].disabled = false;
+      }
+    }
+
+    async function captureOAuthDesign() {
+      const designId = elements["canva-design-select"].value;
+      if (!designId) return;
+      clearCapturePolling();
+      clearJobPolling();
+      setCaptureBusy(true);
+      elements["preview-panel"].classList.add("hidden");
+      elements["job-panel"].classList.remove("hidden");
+      setActivity("Requesting official page exports from Canva…", "Exporting from Canva");
+      try {
+        const result = await api("/api/canva/oauth/capture-jobs", { method: "POST", body: JSON.stringify({ designId }) });
+        activeCaptureJobId = result.jobId;
+        elements["cancel-job"].disabled = false;
+        updateJob({ status: "queued", progress: 0, message: "Waiting for OAuth capture worker…" });
+        pollCaptureJob();
+      } catch (error) {
+        setCaptureBusy(false);
+        setActivity(`${error.code || "CANVA_EXPORT_FAILED"}: ${error.message}`, "Canva export failed", true);
+      }
+    }
+
+    function updateSelection() {
+      const boxes = [...elements.pages.querySelectorAll('input[type="checkbox"]')];
+      const selected = boxes.filter(box => box.checked).length;
+      const busy = Boolean(activeCaptureJobId || activeJobId || activeImageImport || renderingDocument);
+      elements["selected-count"].textContent = `${selected} of ${boxes.length} selected`;
+      elements.reconstruct.disabled = selected === 0 || busy;
+      elements["import-images"].disabled = selected === 0 || busy;
+      elements["toggle-pages"].disabled = busy;
+      elements["toggle-pages"].textContent = selected === boxes.length ? "Clear all" : "Select all";
+    }
+
+    function renderPages(result) {
+      capture = result;
+      elements.pages.replaceChildren();
+      elements["design-title"].textContent = result.title || "Canva design";
+      elements["page-count"].textContent = `${result.pages.length} captured page${result.pages.length === 1 ? "" : "s"}`;
+      for (const page of result.pages) {
+        const label = document.createElement("label");
+        label.className = "page-card";
+        const image = document.createElement("img");
+        image.src = page.thumbnail;
+        image.alt = `Canva page ${page.index + 1}`;
+        const meta = document.createElement("span");
+        meta.className = "page-meta";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.dataset.pageId = page.id;
+        checkbox.addEventListener("change", updateSelection);
+        const text = document.createElement("span");
+        const orientation = page.orientation || (page.width === page.height ? "square" : page.width > page.height ? "landscape" : "portrait");
+        text.textContent = `Page ${page.index + 1} · ${page.width}×${page.height} · ${orientation}`;
+        meta.append(checkbox, text);
+        label.append(image, meta);
+        elements.pages.append(label);
+      }
+      elements["preview-panel"].classList.remove("hidden");
+      updateSelection();
+    }
+
+    async function capturePreview() {
+      const url = elements["canva-url"].value.trim();
+      if (!url) {
+        setActivity("Paste a public Canva view URL first.", "Input required", true);
+        return;
+      }
+      clearCapturePolling();
+      clearJobPolling();
+      setCaptureBusy(true);
+      elements["preview-panel"].classList.add("hidden");
+      elements["job-panel"].classList.add("hidden");
+      setActivity("Opening and capturing the public Canva design…", "Capturing");
+      try {
+        const result = await api("/api/capture-jobs", { method: "POST", body: JSON.stringify({ url }) });
+        activeCaptureJobId = result.jobId;
+        elements["job-panel"].classList.remove("hidden");
+        elements["cancel-job"].disabled = false;
+        updateJob({ status: "queued", progress: 0, message: "Waiting for capture worker…" });
+        pollCaptureJob();
+      } catch (error) {
+        setActivity(`${error.code || "CAPTURE_FAILED"}: ${error.message}`, "Capture failed", true);
+        setCaptureBusy(false);
+      }
+    }
+
+    function clearCapturePolling() {
+      if (capturePollTimer) window.clearTimeout(capturePollTimer);
+      capturePollTimer = null;
+      activeCaptureJobId = null;
+      updateSelection();
+    }
+
+    async function pollCaptureJob() {
+      if (!activeCaptureJobId) return;
+      const requestedJobId = activeCaptureJobId;
+      try {
+        const job = await api(`/api/capture-jobs/${requestedJobId}`);
+        if (activeCaptureJobId !== requestedJobId) return;
+        updateJob(job);
+        if (job.status === "completed") {
+          const captureId = job.captureId;
+          clearCapturePolling();
+          const result = await api(`/api/captures/${captureId}`);
+          renderPages(result);
+          elements["cancel-job"].disabled = true;
+          setCaptureBusy(false);
+          setActivity("Pages ready. Import exact images now, or use optional editable AI reconstruction.", "Pages ready");
+          return;
+        }
+        if (job.status === "failed" || job.status === "cancelled") {
+          const detail = job.error && job.error.message ? job.error.message : job.message;
+          clearCapturePolling();
+          elements["cancel-job"].disabled = true;
+          setCaptureBusy(false);
+          setActivity(detail || `Capture ${job.status}.`, job.status === "failed" ? "Capture failed" : "Cancelled", job.status === "failed");
+          return;
+        }
+        capturePollTimer = window.setTimeout(pollCaptureJob, 700);
+      } catch (error) {
+        clearCapturePolling();
+        elements["cancel-job"].disabled = true;
+        setCaptureBusy(false);
+        setActivity(error.message, "Capture failed", true);
+      }
+    }
+
+    function selectedPageIds() {
+      return [...elements.pages.querySelectorAll('input[type="checkbox"]:checked')].map(box => box.dataset.pageId);
+    }
+
+    function selectedPages() {
+      const ids = new Set(selectedPageIds());
+      return capture ? capture.pages.filter(page => ids.has(page.id)) : [];
+    }
+
+    function waitForPlugin(sessionId, expectedType, timeoutMs = 30000) {
+      if (imagePluginWaiter) throw new Error("Another Figma import operation is still pending.");
+      return new Promise((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          imagePluginWaiter = null;
+          reject(new Error("Figma did not acknowledge the page import in time."));
+        }, timeoutMs);
+        imagePluginWaiter = { sessionId, expectedType, resolve, reject, timer };
+      });
+    }
+
+    function postToPluginAndWait(message, expectedType, timeoutMs) {
+      const waiting = waitForPlugin(message.sessionId, expectedType, timeoutMs);
+      parent.postMessage({ pluginMessage: message }, "*");
+      return waiting;
+    }
+
+    async function fetchFullPageImage(page, signal) {
+      if (typeof page.imageUrl !== "string" || !page.imageUrl.startsWith("/api/captures/")) {
+        throw new Error(`Page ${page.index + 1} has no trusted full-resolution image URL.`);
+      }
+      const response = await fetch(`${backendBase()}${page.imageUrl}`, {
+        method: "GET",
+        headers: { Accept: "image/png" },
+        signal,
+      });
+      if (!response.ok) {
+        let message = `Full-resolution page request returned HTTP ${response.status}.`;
+        try {
+          const payload = await response.json();
+          if (payload && payload.error && payload.error.message) message = payload.error.message;
+        } catch (_error) { /* retain HTTP message */ }
+        throw new Error(message);
+      }
+      const buffer = await response.arrayBuffer();
+      if (!buffer.byteLength || buffer.byteLength > 25 * 1024 * 1024) {
+        throw new Error(`Page ${page.index + 1} image is empty or exceeds the 25MB import limit.`);
+      }
+      return new Uint8Array(buffer);
+    }
+
+    async function importPageImages() {
+      const pages = selectedPages();
+      if (!capture || !pages.length) return;
+      const sessionId = `page-images-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const controller = new AbortController();
+      activeImageImport = { sessionId, controller, cancelled: false };
+      setCaptureBusy(true);
+      updateSelection();
+      elements["job-panel"].classList.remove("hidden");
+      elements["cancel-job"].disabled = false;
+      updateJob({ status: "importing images", progress: 0, message: `Preparing ${pages.length} page(s)…` });
+      setActivity(`Downloading and importing ${pages.length} full-resolution Canva page${pages.length === 1 ? "" : "s"}…`, "Importing images");
+      try {
+        await postToPluginAndWait({
+          type: "begin-page-image-import",
+          sessionId,
+          payload: {
+            captureId: capture.captureId,
+            title: capture.title,
+            pages: pages.map(({ id, index, width, height, orientation }) => ({ id, index, width, height, orientation })),
+          },
+        }, "page-image-import-ready");
+
+        for (const [position, page] of pages.entries()) {
+          if (!activeImageImport || activeImageImport.cancelled) throw new DOMException("Import cancelled.", "AbortError");
+          const progress = Math.round((position / pages.length) * 100);
+          updateJob({ status: "importing images", progress, message: `Downloading page ${position + 1} of ${pages.length}…` });
+          const imageBytes = await fetchFullPageImage(page, controller.signal);
+          updateJob({ status: "importing images", progress, message: `Creating Figma page ${position + 1} of ${pages.length}…` });
+          await postToPluginAndWait({ type: "append-page-image", sessionId, pageId: page.id, imageBytes }, "page-image-import-page", 60000);
+        }
+
+        updateJob({ status: "finalizing", progress: 99, message: "Selecting imported Figma frames…" });
+        await postToPluginAndWait({ type: "finish-page-image-import", sessionId }, "import-completed", 60000);
+      } catch (error) {
+        parent.postMessage({ pluginMessage: { type: "cancel-page-image-import", sessionId } }, "*");
+        const cancelled = (activeImageImport && activeImageImport.cancelled) || error.name === "AbortError";
+        setActivity(cancelled ? "Page-image import cancelled." : error.message, cancelled ? "Cancelled" : "Import failed", !cancelled);
+      } finally {
+        if (imagePluginWaiter && imagePluginWaiter.sessionId === sessionId) {
+          window.clearTimeout(imagePluginWaiter.timer);
+          imagePluginWaiter = null;
+        }
+        activeImageImport = null;
+        elements["cancel-job"].disabled = true;
+        setCaptureBusy(false);
+        updateSelection();
+      }
+    }
+
+    function clearJobPolling() {
+      if (pollTimer) window.clearTimeout(pollTimer);
+      pollTimer = null;
+      activeJobId = null;
+      updateSelection();
+    }
+
+    function updateJob(job) {
+      const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+      elements["job-status"].textContent = String(job.status || "working").replace(/^./, value => value.toUpperCase());
+      elements["job-percent"].textContent = `${progress}%`;
+      elements["progress-bar"].style.width = `${progress}%`;
+      elements["job-message"].textContent = job.message || "Working…";
+    }
+
+    function startDocumentRender(document, jobId) {
+      for (const asset of Object.values((document && document.assets) || {})) {
+        if (typeof asset.url === "string" && asset.url.startsWith("/api/")) {
+          asset.url = `${backendBase()}${asset.url}`;
+        }
+      }
+      renderingDocument = true;
+      updateSelection();
+      if (renderTimer) window.clearTimeout(renderTimer);
+      renderTimer = window.setTimeout(() => {
+        renderingDocument = false;
+        renderTimer = null;
+        updateSelection();
+        setActivity("Figma did not finish rendering within five minutes.", "Render timeout", true);
+      }, 300000);
+      parent.postMessage({ pluginMessage: { type: "import-design", document, jobId } }, "*");
+    }
+
+    function finishDocumentRender() {
+      renderingDocument = false;
+      if (renderTimer) window.clearTimeout(renderTimer);
+      renderTimer = null;
+      updateSelection();
+    }
+
+    async function pollJob() {
+      if (!activeJobId) return;
+      const requestedJobId = activeJobId;
+      try {
+        const job = await api(`/api/reconstruction-jobs/${requestedJobId}`);
+        if (activeJobId !== requestedJobId) return;
+        updateJob(job);
+        if (job.status === "completed") {
+          const completedJobId = requestedJobId;
+          activeJobId = null;
+          elements["cancel-job"].disabled = true;
+          setActivity("Reconstruction complete. Creating native Figma layers…", "Rendering");
+          startDocumentRender(job.result, completedJobId);
+          return;
+        }
+        if (job.status === "failed" || job.status === "cancelled") {
+          const detail = job.error && job.error.message ? job.error.message : job.message;
+          clearJobPolling();
+          setActivity(detail || `Job ${job.status}.`, job.status === "failed" ? "Conversion failed" : "Cancelled", job.status === "failed");
+          return;
+        }
+        pollTimer = window.setTimeout(pollJob, 900);
+      } catch (error) {
+        clearJobPolling();
+        setActivity(error.message, "Job failed", true);
+      }
+    }
+
+    async function reconstruct() {
+      const pageIds = selectedPageIds();
+      if (!capture || !pageIds.length) return;
+      elements["job-panel"].classList.remove("hidden");
+      elements["cancel-job"].disabled = false;
+      setActivity("Submitting selected pages for OCR and layout reconstruction…", "Queued");
+      try {
+        const result = await api("/api/reconstruction-jobs", {
+          method: "POST",
+          body: JSON.stringify({ captureId: capture.captureId, pageIds }),
+        });
+        activeJobId = result.jobId;
+        updateSelection();
+        pollJob();
+      } catch (error) {
+        setActivity(`${error.code || "JOB_FAILED"}: ${error.message}`, "Conversion failed", true);
+      }
+    }
+
+    async function sha256Hex(bytes) {
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function compareFigmaExport(message) {
+      const page = capture && capture.pages.find(item => item.id === message.pageId);
+      if (!page) throw new Error(`Final Figma QA could not find captured page ${message.pageId}.`);
+      const exportBytes = message.imageBytes instanceof Uint8Array ? message.imageBytes : new Uint8Array(message.imageBytes || []);
+      if (!exportBytes.length || exportBytes.length > 25 * 1024 * 1024) throw new Error(`Final Figma QA export for page ${page.index + 1} is invalid.`);
+      const referenceBytes = await fetchFullPageImage(page);
+      const [exported, reference] = await Promise.all([
+        createImageBitmap(new Blob([exportBytes], { type: "image/png" })),
+        createImageBitmap(new Blob([referenceBytes], { type: "image/png" })),
+      ]);
+      try {
+        if (exported.width !== page.width || exported.height !== page.height) {
+          throw new Error(`Final Figma export for page ${page.index + 1} is ${exported.width}×${exported.height}; expected ${page.width}×${page.height}.`);
+        }
+        const scale = Math.min(1, 2048 / Math.max(exported.width, exported.height));
+        const width = Math.max(1, Math.round(exported.width * scale));
+        const height = Math.max(1, Math.round(exported.height * scale));
+        const sourceCanvas = document.createElement("canvas");
+        const figmaCanvas = document.createElement("canvas");
+        sourceCanvas.width = figmaCanvas.width = width;
+        sourceCanvas.height = figmaCanvas.height = height;
+        const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+        const figmaContext = figmaCanvas.getContext("2d", { willReadFrequently: true });
+        sourceContext.drawImage(reference, 0, 0, width, height);
+        figmaContext.drawImage(exported, 0, 0, width, height);
+        const sourcePixels = sourceContext.getImageData(0, 0, width, height).data;
+        const figmaPixels = figmaContext.getImageData(0, 0, width, height).data;
+        let totalDifference = 0;
+        let mismatched = 0;
+        const pixels = width * height;
+        for (let index = 0; index < sourcePixels.length; index += 4) {
+          const red = Math.abs(sourcePixels[index] - figmaPixels[index]);
+          const green = Math.abs(sourcePixels[index + 1] - figmaPixels[index + 1]);
+          const blue = Math.abs(sourcePixels[index + 2] - figmaPixels[index + 2]);
+          totalDifference += red + green + blue;
+          if (Math.max(red, green, blue) >= 18) mismatched += 1;
+        }
+        const pixelDifference = totalDifference / (pixels * 3 * 255);
+        return {
+          pageId: page.id,
+          exportWidth: exported.width,
+          exportHeight: exported.height,
+          comparedWidth: width,
+          comparedHeight: height,
+          exportByteLength: exportBytes.length,
+          exportSha256: await sha256Hex(exportBytes),
+          pixelDifference,
+          visualSimilarity: 1 - pixelDifference,
+          mismatchRate: mismatched / pixels,
+        };
+      } finally {
+        if (typeof exported.close === "function") exported.close();
+        if (typeof reference.close === "function") reference.close();
+      }
+    }
+
+    function registerFigmaQaExport(message) {
+      const jobId = String(message.jobId || "");
+      if (!jobId) return;
+      const comparisons = figmaQaComparisons.get(jobId) || [];
+      if (comparisons.some(item => item.pageId === message.pageId)) return;
+      comparisons.push({ pageId: message.pageId, promise: compareFigmaExport(message) });
+      figmaQaComparisons.set(jobId, comparisons);
+    }
+
+    async function finalizeFigmaQa(report) {
+      const jobId = report && report.reconstructionJobId;
+      if (!jobId) return null;
+      const comparisons = figmaQaComparisons.get(jobId) || [];
+      figmaQaComparisons.delete(jobId);
+      const settled = await Promise.allSettled(comparisons.map(item => item.promise));
+      const pages = settled.filter(item => item.status === "fulfilled").map(item => item.value);
+      for (const failed of settled.filter(item => item.status === "rejected")) {
+        report.warnings.push(`Final Figma QA: ${failed.reason && failed.reason.message ? failed.reason.message : String(failed.reason)}`);
+      }
+      if (pages.length !== report.pages) {
+        report.warnings.push(`Final Figma QA compared ${pages.length} of ${report.pages} page(s).`);
+        return null;
+      }
+      try {
+        const qa = await api(`/api/reconstruction-jobs/${jobId}/figma-qa`, {
+          method: "POST",
+          body: JSON.stringify({ pages }),
+        });
+        report.finalFigmaVisualSimilarity = qa.summary.figmaVisualSimilarity;
+        report.finalFigmaPixelDifference = qa.summary.figmaPixelDifference;
+        report.finalFigmaMismatchRate = qa.summary.mismatchRate;
+        report.phase1QaPassed = qa.passed;
+        if (!qa.passed) report.warnings.push(`Final Figma QA passed ${qa.summary.passedPages} of ${qa.summary.pageCount} page(s).`);
+        return qa;
+      } catch (error) {
+        report.warnings.push(`Final Figma QA submission failed: ${error.message}`);
+        return null;
+      }
+    }
+
+    async function cancelJob() {
+      if (activeImageImport) {
+        activeImageImport.cancelled = true;
+        activeImageImport.controller.abort();
+        parent.postMessage({ pluginMessage: { type: "cancel-page-image-import", sessionId: activeImageImport.sessionId } }, "*");
+        if (imagePluginWaiter) {
+          window.clearTimeout(imagePluginWaiter.timer);
+          imagePluginWaiter.reject(new DOMException("Import cancelled.", "AbortError"));
+          imagePluginWaiter = null;
+        }
+        elements["cancel-job"].disabled = true;
+        return;
+      }
+      if (activeCaptureJobId) {
+        const jobId = activeCaptureJobId;
+        elements["cancel-job"].disabled = true;
+        try {
+          await api(`/api/capture-jobs/${jobId}`, { method: "DELETE" });
+          clearCapturePolling();
+          setCaptureBusy(false);
+          setActivity("Canva capture cancelled.", "Cancelled");
+        } catch (error) {
+          elements["cancel-job"].disabled = false;
+          setActivity(error.message, "Cancellation failed", true);
+        }
+        return;
+      }
+      if (!activeJobId) return;
+      const jobId = activeJobId;
+      elements["cancel-job"].disabled = true;
+      try {
+        await api(`/api/reconstruction-jobs/${jobId}`, { method: "DELETE" });
+        clearJobPolling();
+        setActivity("Conversion cancelled.", "Cancelled");
+      } catch (error) {
+        setActivity(error.message, "Cancellation failed", true);
+      }
+    }
+
+    function showSummary(report) {
+      elements.summary.replaceChildren();
+      const missingFonts = Array.isArray(report.missingFonts) ? report.missingFonts : [];
+      const fontSubstitutions = Array.isArray(report.fontSubstitutions) ? report.fontSubstitutions : [];
+      const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+      const lines = [
+        `${report.pages} page(s) imported`,
+        `${report.fallbacks} raster fallback layer(s)`,
+        `${Number(report.originalAssets || 0)} original Canva image asset(s)`,
+        `${Number(report.croppedImages || 0)} screenshot-cropped image layer(s)`,
+        `${Number(report.clippedGroups || 0)} clipped group(s)`,
+        `${Number(report.gradientFills || 0)} native gradient fill(s)`,
+        `${Number(report.nativeEffects || 0)} native effect(s)`,
+        `${report.failedNodes} failed layer(s)`,
+        `${missingFonts.length} missing font(s)`,
+        `${fontSubstitutions.length} font substitution(s)`,
+      ];
+      if (Number.isFinite(report.nativeCoverage)) lines.push(`${Math.round(report.nativeCoverage * 100)}% native coverage`);
+      if (Number.isFinite(report.fallbackCoverage)) lines.push(`${Math.round(report.fallbackCoverage * 100)}% raster fallback coverage`);
+      if (Number.isFinite(report.exactTextRate)) lines.push(`${Math.round(report.exactTextRate * 100)}% exact text score`);
+      if (Number.isFinite(report.visualSimilarity)) lines.push(`${Math.round(report.visualSimilarity * 100)}% visual similarity`);
+      if (Number.isFinite(report.pixelDifference)) lines.push(`${Math.round(report.pixelDifference * 100)}% pixel difference`);
+      if (Number.isFinite(report.missingRegionRate)) lines.push(`${Math.round(report.missingRegionRate * 100)}% missing-region rate`);
+      if (Number.isFinite(report.duplicateTextBlocks)) lines.push(`${report.duplicateTextBlocks} duplicate text block(s)`);
+      if (Number.isFinite(report.finalFigmaVisualSimilarity)) lines.push(`${Math.round(report.finalFigmaVisualSimilarity * 100)}% final Figma visual similarity`);
+      if (Number.isFinite(report.finalFigmaMismatchRate)) lines.push(`${Math.round(report.finalFigmaMismatchRate * 100)}% materially different pixels`);
+      if (typeof report.phase1QaPassed === "boolean") lines.push(`Phase 1 page QA: ${report.phase1QaPassed ? "passed" : "failed"}`);
+      if (report.reconstructionJobId) lines.push(`QA job ID: ${report.reconstructionJobId}`);
+      if (missingFonts.length) lines.push(`Missing: ${missingFonts.join(", ")}`);
+      if (fontSubstitutions.length) lines.push(`Substituted: ${fontSubstitutions.join(", ")}`);
+      if (warnings.length) lines.push(`${warnings.length} warning(s)`);
+      for (const warning of warnings.slice(0, 8)) lines.push(`⚠ ${warning}`);
+      if (warnings.length > 8) lines.push(`…and ${warnings.length - 8} more warning(s)`);
+      for (const line of lines) {
+        const item = document.createElement("li");
+        item.textContent = line;
+        elements.summary.append(item);
+      }
+      elements.summary.classList.remove("hidden");
+    }
+
+    elements.preview.addEventListener("click", capturePreview);
+    elements["canva-connect"].addEventListener("click", connectCanva);
+    elements["canva-design-search-button"].addEventListener("click", loadCanvaDesigns);
+    elements["canva-design-search"].addEventListener("keydown", event => { if (event.key === "Enter") loadCanvaDesigns(); });
+    elements["canva-design-select"].addEventListener("change", () => { elements["canva-design-load"].disabled = !elements["canva-design-select"].value; });
+    elements["canva-design-load"].addEventListener("click", captureOAuthDesign);
+    elements["import-images"].addEventListener("click", importPageImages);
+    elements.reconstruct.addEventListener("click", reconstruct);
+    elements["cancel-job"].addEventListener("click", cancelJob);
+    elements.close.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "close-plugin" } }, "*"));
+    elements["toggle-pages"].addEventListener("click", () => {
+      const boxes = [...elements.pages.querySelectorAll('input[type="checkbox"]')];
+      const shouldSelect = boxes.some(box => !box.checked);
+      boxes.forEach(box => { box.checked = shouldSelect; });
+      updateSelection();
+    });
+    window.onmessage = async event => {
+      const message = event.data && event.data.pluginMessage;
+      if (!message) return;
+      if (message.type === "figma-qa-export") {
+        registerFigmaQaExport(message);
+        return;
+      }
+      if (imagePluginWaiter && message.sessionId === imagePluginWaiter.sessionId) {
+        if (message.type === imagePluginWaiter.expectedType) {
+          const waiter = imagePluginWaiter;
+          imagePluginWaiter = null;
+          window.clearTimeout(waiter.timer);
+          waiter.resolve(message);
+          if (message.type !== "import-completed") return;
+        } else if (message.type === "import-failed") {
+          const waiter = imagePluginWaiter;
+          imagePluginWaiter = null;
+          window.clearTimeout(waiter.timer);
+          waiter.reject(new Error(message.message || "Figma image import failed."));
+          return;
+        }
+      }
+      if (message.type === "import-completed") {
+        finishDocumentRender();
+        await finalizeFigmaQa(message.report);
+        showSummary(message.report);
+        updateJob({ status: "completed", progress: 100, message: `${message.report.pages} page(s) imported.` });
+        const missingFonts = Array.isArray(message.report.missingFonts) ? message.report.missingFonts.length : 0;
+        const substitutions = Number(message.report.fallbacks || 0) + Number(message.report.croppedImages || 0) + Number(message.report.failedNodes || 0) + missingFonts;
+        const completedMessage = message.report.mode === "page-images"
+          ? "Exact full-resolution Canva pages imported successfully."
+          : substitutions
+            ? `Editable import completed with ${substitutions} substitution(s) or warning layer(s). Review the summary below.`
+            : "Native Figma layers created successfully.";
+        setActivity(completedMessage, substitutions ? "Completed with warnings" : "Completed");
+      } else if (message.type === "import-failed") {
+        finishDocumentRender();
+        setActivity(message.message || "Figma rendering failed.", "Import failed", true);
+      }
+    };
+
+    refreshCanvaOAuthStatus({ loadDesigns: true });
+
+  </script>
+</body>
+</html>

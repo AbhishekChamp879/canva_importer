@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from threading import Lock
+
+from .acquisition import (
+    CanvaConnectClient,
+    CanvaOAuthAcquisitionProvider,
+    CanvaOAuthManager,
+    CaptureCoordinator,
+    PublicCanvaAcquisitionProvider,
+)
+from .config import Settings
+from .capture_jobs import CaptureJobRunner
+from .jobs import ReconstructionJobRunner
+from .providers import OpenAILayoutProvider, OpenAIVisionOcrProvider
+from .store import ArtifactStore
+
+
+class ServiceContainer:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.store = ArtifactStore(settings.store_root, settings.artifact_ttl_seconds, settings.max_capture_bytes)
+        self.capture = PublicCanvaAcquisitionProvider(settings, CaptureCoordinator(settings.capture_concurrency))
+        self.canva_oauth = CanvaOAuthManager(settings)
+        self.canva_api = CanvaConnectClient(self.canva_oauth)
+        self.oauth_capture = CanvaOAuthAcquisitionProvider(settings, self.canva_api)
+        self.capture_jobs = CaptureJobRunner(
+            self.store, self.capture, settings.capture_concurrency, oauth_capture=self.oauth_capture,
+        )
+        self.ocr = OpenAIVisionOcrProvider(settings)
+        self.layout = OpenAILayoutProvider(settings)
+        self.jobs = ReconstructionJobRunner(self.store, self.ocr, self.layout, settings.job_concurrency)
+        self._shutdown_lock = Lock()
+        self._shutdown_complete = False
+
+    def start_background_tasks(self) -> None:
+        self.store.start_cleanup_worker()
+
+    def shutdown(self) -> None:
+        with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            self._shutdown_complete = True
+            self.store.stop_cleanup_worker()
+            self.capture_jobs.shutdown()
+            self.jobs.shutdown()
