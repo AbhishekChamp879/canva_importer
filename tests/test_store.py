@@ -37,6 +37,16 @@ class ArtifactStoreTests(unittest.TestCase):
             restored = store.get_capture(record.id)
             self.assertEqual(base64.b64decode(restored.pages[0].screenshot_base64), image_bytes)
 
+            # Previously saved captures may include layer hints. They should
+            # remain usable for page import after removing the hint models.
+            metadata["pages"][0]["textHints"] = [{"text": "Old hint"}]
+            metadata["pages"][0]["imageHints"] = [{"src": "https://media.canva.com/old.png"}]
+            (capture_directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            reloaded = ArtifactStore(Path(directory)).get_capture(record.id)
+            self.assertEqual(base64.b64decode(reloaded.pages[0].screenshot_base64), image_bytes)
+            self.assertNotIn("textHints", reloaded.pages[0].json_dict())
+            self.assertNotIn("imageHints", reloaded.pages[0].json_dict())
+
     def test_total_capture_byte_limit_is_enforced_before_persistence(self):
         image = Image.new("RGB", (32, 16), "orange")
         buffer = io.BytesIO()

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import base64
-import hashlib
 import shutil
 import time
 from pathlib import Path
@@ -11,27 +10,19 @@ from threading import Event, RLock, Thread
 from typing import Any
 
 from .errors import ServiceError
-from .models import CaptureJob, CaptureRecord, ReconstructionJob, new_id, utc_now
+from .models import CaptureJob, CaptureRecord, new_id, utc_now
 
 
 class ArtifactStore:
     def __init__(self, root: Path, ttl_seconds: int = 3600, max_capture_bytes: int = 512 * 1024 * 1024):
-        self.root = root
         self.ttl_seconds = ttl_seconds
         self.max_capture_bytes = max_capture_bytes
         self.capture_root = root / "captures"
         self.capture_job_root = root / "capture-jobs"
-        self.job_root = root / "jobs"
-        self.job_asset_root = root / "job-assets"
-        self.figma_qa_root = root / "figma-qa"
         self.capture_root.mkdir(parents=True, exist_ok=True)
         self.capture_job_root.mkdir(parents=True, exist_ok=True)
-        self.job_root.mkdir(parents=True, exist_ok=True)
-        self.job_asset_root.mkdir(parents=True, exist_ok=True)
-        self.figma_qa_root.mkdir(parents=True, exist_ok=True)
         self._captures: dict[str, CaptureRecord] = {}
         self._capture_jobs: dict[str, CaptureJob] = {}
-        self._jobs: dict[str, ReconstructionJob] = {}
         self._lock = RLock()
         self._sweeper_stop = Event()
         self._sweeper_thread: Thread | None = None
@@ -86,6 +77,8 @@ class ArtifactStore:
         try:
             for page in raw.get("pages", []):
                 page_payload = dict(page)
+                page_payload.pop("textHints", None)
+                page_payload.pop("imageHints", None)
                 image_file = page_payload.pop("_imageFile")
                 image_bytes = (directory / image_file).read_bytes()
                 page_payload["screenshotBase64"] = base64.b64encode(image_bytes).decode("ascii")
@@ -93,43 +86,6 @@ class ArtifactStore:
             raw["pages"] = pages
             return CaptureRecord.model_validate(raw)
         except (OSError, KeyError, ValueError):
-            return None
-
-    @staticmethod
-    def _asset_filename(asset_id: str, mime_type: str) -> str:
-        extension = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif"}.get(mime_type, ".bin")
-        return hashlib.sha256(asset_id.encode("utf-8")).hexdigest() + extension
-
-    def _persist_job(self, job: ReconstructionJob) -> None:
-        payload = job.json_dict()
-        result = payload.get("result")
-        if result:
-            directory = self.job_asset_root / job.id
-            directory.mkdir(parents=True, exist_ok=True)
-            for asset_id, asset in result.get("assets", {}).items():
-                encoded = asset.pop("dataBase64", None)
-                if not encoded:
-                    continue
-                image_bytes = base64.b64decode(encoded, validate=True)
-                filename = self._asset_filename(asset_id, asset.get("mimeType", ""))
-                (directory / filename).write_bytes(image_bytes)
-                asset["_dataFile"] = filename
-        self._atomic_write(self._path(self.job_root, job.id), payload)
-
-    def _read_persisted_job(self, job_id: str) -> ReconstructionJob | None:
-        raw = self._read(self._path(self.job_root, job_id))
-        if not raw:
-            return None
-        result = raw.get("result")
-        try:
-            if result:
-                for asset in result.get("assets", {}).values():
-                    filename = asset.pop("_dataFile", None)
-                    if filename:
-                        image_bytes = (self.job_asset_root / job_id / filename).read_bytes()
-                        asset["dataBase64"] = base64.b64encode(image_bytes).decode("ascii")
-            return ReconstructionJob.model_validate(raw)
-        except (OSError, ValueError):
             return None
 
     def sweep(self) -> None:
@@ -149,18 +105,6 @@ class ArtifactStore:
                 if not raw or float(raw.get("expiresAt", 0)) <= now:
                     shutil.rmtree(directory, ignore_errors=True)
                     self._captures.pop(directory.name, None)
-            for path in self.job_root.glob("*.json"):
-                raw = self._read(path)
-                updated = raw.get("updatedAt") if raw else None
-                try:
-                    timestamp = __import__("datetime").datetime.fromisoformat(str(updated).replace("Z", "+00:00")).timestamp()
-                except Exception:
-                    timestamp = 0
-                if timestamp + self.ttl_seconds <= now:
-                    path.unlink(missing_ok=True)
-                    self._jobs.pop(path.stem, None)
-                    shutil.rmtree(self.job_asset_root / path.stem, ignore_errors=True)
-                    self._path(self.figma_qa_root, path.stem).unlink(missing_ok=True)
             for path in self.capture_job_root.glob("*.json"):
                 raw = self._read(path)
                 updated = raw.get("updatedAt") if raw else None
@@ -221,6 +165,10 @@ class ArtifactStore:
                 record = self._read_capture_directory(record_id)
                 if not record:
                     raw = self._read(self._path(self.capture_root, record_id))
+                    if raw:
+                        for page in raw.get("pages", []):
+                            page.pop("textHints", None)
+                            page.pop("imageHints", None)
                     record = CaptureRecord.model_validate(raw) if raw else None
             if not record or record.expires_at <= time.time():
                 return None
@@ -272,86 +220,3 @@ class ArtifactStore:
         if not self.get_capture_job(job_id):
             return None
         return self.update_capture_job(job_id, cancelled=True, status="cancelled", message="Cancelled")
-
-    def create_job(self, capture_id: str, page_ids: list[str]) -> ReconstructionJob:
-        now = utc_now()
-        job = ReconstructionJob(
-            id=new_id(),
-            captureId=capture_id,
-            pageIds=page_ids,
-            status="queued",
-            progress=0,
-            totalPages=len(page_ids),
-            message="Queued",
-            createdAt=now,
-            updatedAt=now,
-            cancelled=False,
-        )
-        with self._lock:
-            self._jobs[job.id] = job
-            self._persist_job(job)
-        return job
-
-    def get_job(self, job_id: str) -> ReconstructionJob | None:
-        self.sweep()
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job:
-                job = self._read_persisted_job(job_id)
-                if job:
-                    self._jobs[job_id] = job
-            return job
-
-    def update_job(self, job_id: str, **patch) -> ReconstructionJob:
-        with self._lock:
-            job = self.get_job(job_id)
-            if not job:
-                raise KeyError("Job not found")
-            payload = job.json_dict(exclude_none=False)
-            aliases = {
-                "capture_id": "captureId", "page_ids": "pageIds", "current_page": "currentPage",
-                "total_pages": "totalPages", "created_at": "createdAt", "updated_at": "updatedAt",
-            }
-            for key, value in patch.items():
-                payload[aliases.get(key, key)] = value.json_dict() if hasattr(value, "json_dict") else value
-            payload["updatedAt"] = utc_now()
-            updated = ReconstructionJob.model_validate(payload)
-            self._jobs[job_id] = updated
-            self._persist_job(updated)
-            return updated
-
-    def cancel_job(self, job_id: str) -> ReconstructionJob | None:
-        if not self.get_job(job_id):
-            return None
-        return self.update_job(job_id, cancelled=True, status="cancelled", message="Cancelled")
-
-    def get_job_asset(self, job_id: str, asset_id: str) -> tuple[bytes, str] | None:
-        job = self._jobs.get(job_id)
-        if job and job.result and asset_id in job.result.assets:
-            asset = job.result.assets[asset_id]
-            if asset.data_base64:
-                return base64.b64decode(asset.data_base64, validate=True), asset.mime_type
-        raw = self._read(self._path(self.job_root, job_id))
-        asset = ((raw or {}).get("result") or {}).get("assets", {}).get(asset_id)
-        if not asset:
-            return None
-        filename = asset.get("_dataFile")
-        if not filename:
-            return None
-        try:
-            return (self.job_asset_root / job_id / filename).read_bytes(), asset.get("mimeType", "application/octet-stream")
-        except OSError:
-            return None
-
-    def put_figma_qa_report(self, job_id: str, report: dict[str, Any]) -> dict[str, Any]:
-        if not self.get_job(job_id):
-            raise KeyError("Reconstruction job not found")
-        with self._lock:
-            self._atomic_write(self._path(self.figma_qa_root, job_id), report)
-        return report
-
-    def get_figma_qa_report(self, job_id: str) -> dict[str, Any] | None:
-        self.sweep()
-        if not self.get_job(job_id):
-            return None
-        return self._read(self._path(self.figma_qa_root, job_id))

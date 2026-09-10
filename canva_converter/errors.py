@@ -41,7 +41,7 @@ _SECRET_PATTERN = re.compile(
     r"(?i)(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)"
     r"(\s*[:=]\s*)([^\s,;&]+)"
 )
-_OPENAI_KEY_PATTERN = re.compile(r"\bsk-(?:proj-)?[0-9A-Za-z_-]{20,}\b")
+_API_TOKEN_PATTERN = re.compile(r"\bsk-(?:proj-)?[0-9A-Za-z_-]{20,}\b")
 _SENSITIVE_QUERY_KEYS = {"key", "api_key", "apikey", "access_token", "token", "auth", "signature", "sig"}
 _CANVA_ROUTE_NAMES = {"view", "edit", "watch", "present", "play", "preview", "share"}
 
@@ -84,5 +84,5 @@ def public_error_message(error: Exception | str, fallback: str = "The operation 
     message = re.sub(r"\s+", " ", str(error)).strip() or fallback
     message = _URL_PATTERN.sub(_redact_url, message)
     message = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", message)
-    message = _OPENAI_KEY_PATTERN.sub("[redacted-openai-key]", message)
+    message = _API_TOKEN_PATTERN.sub("[redacted-api-key]", message)
     return message[:limit]

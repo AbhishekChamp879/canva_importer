@@ -10,7 +10,6 @@ from ..errors import AcquisitionError
 
 MAX_SOURCE_URL_LENGTH = 4096
 MAX_PATH_LENGTH = 2048
-MAX_DESIGN_SEGMENT_LENGTH = 256
 MAX_REDIRECTS = 10
 SHORT_PATH = re.compile(r"^/[A-Za-z0-9_-]{1,256}/?$")
 DESIGN_SEGMENT = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -28,7 +27,6 @@ NO_TOKEN_ROUTE_NAMES = {"view", "edit", "watch", "present", "play", "preview", "
 class CanvaDesignPath:
     design_id: str
     share_token: str | None
-    mode: str | None
 
 
 def _clean_source(value: str) -> str | None:
@@ -59,21 +57,17 @@ def _parse_design_path(path: str) -> CanvaDesignPath | None:
     if not DESIGN_SEGMENT.fullmatch(design_id):
         return None
     token: str | None = None
-    mode: str | None = None
     if len(parts) == 3:
         third = parts[2].lower()
-        if third in NO_TOKEN_ROUTE_NAMES:
-            mode = third
-        elif DESIGN_SEGMENT.fullmatch(parts[2]):
+        if third not in NO_TOKEN_ROUTE_NAMES:
+            if not DESIGN_SEGMENT.fullmatch(parts[2]):
+                return None
             token = parts[2]
-        else:
-            return None
     elif len(parts) == 4:
         token = parts[2]
-        mode = parts[3].lower()
         if not DESIGN_SEGMENT.fullmatch(token) or not DESIGN_SEGMENT.fullmatch(parts[3]):
             return None
-    return CanvaDesignPath(design_id=design_id, share_token=token, mode=mode)
+    return CanvaDesignPath(design_id=design_id, share_token=token)
 
 
 def is_canva_host(parsed: ParseResult) -> bool:

@@ -18,10 +18,10 @@ from canva_converter.errors import ServiceError
 def settings_for_test(root: str) -> Settings:
     return Settings(
         host="127.0.0.1", port=3000, capture_concurrency=2, capture_timeout_ms=60_000,
-        job_concurrency=1, artifact_ttl_seconds=3600, max_capture_bytes=64 * 1024 * 1024,
+        artifact_ttl_seconds=3600, max_capture_bytes=64 * 1024 * 1024,
         max_api_response_bytes=8 * 1024 * 1024, browser_executable_path=None,
-        browser_auto_install=False, browser_install_timeout_seconds=60, openai_api_key=None,
-        openai_model="gpt-test", store_root=Path(root), development=True,
+        browser_auto_install=False, browser_install_timeout_seconds=60,
+        store_root=Path(root),
         canva_client_id="client-test", canva_client_secret="secret-test",
         canva_redirect_uri="http://127.0.0.1:3000/api/canva/oauth/callback",
     )
