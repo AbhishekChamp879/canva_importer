@@ -6,13 +6,13 @@ import hashlib
 import html
 import io
 
-from flask import Blueprint, current_app, jsonify, request, send_file, url_for
+from flask import Blueprint, current_app, jsonify, request, send_file
 from PIL import Image
 from pydantic import ValidationError
 
 from .config import Settings
 from .errors import ServiceError, public_error_message
-from .models import CaptureRequest, FigmaQaSubmission, ReconstructionRequest, utc_now, validate_uuid
+from .models import CaptureRequest, validate_uuid
 from .services import ServiceContainer
 from .acquisition.url_policy import is_valid_canva_url
 from .acquisition.oauth import oauth_design_url
@@ -52,7 +52,7 @@ def bounded_json(payload, status: int = 200):
     if len(response.get_data()) > settings().max_api_response_bytes:
         return error_response(
             "API_RESPONSE_LIMIT_EXCEEDED",
-            f"The response exceeds the configured {settings().max_api_response_bytes // (1024 * 1024)}MB API limit. Import fewer editable pages at once.",
+            f"The response exceeds the configured {settings().max_api_response_bytes // (1024 * 1024)}MB API limit. Capture a smaller design.",
             413,
         )
     return response
@@ -67,14 +67,6 @@ def health():
         "status": "ok",
         "service": "canva-converter",
         "runtime": "python-flask",
-        "schemaVersion": 1,
-        "aiConfigured": bool(config.openai_api_key),
-        "providers": {
-            "ocr": "openai-vision",
-            "layout": "openai",
-            "ocrConfigured": bool(config.openai_api_key),
-            "layoutConfigured": bool(config.openai_api_key),
-        },
         "browser": {
             "portable": True,
             "autoInstall": config.browser_auto_install,
@@ -83,7 +75,6 @@ def health():
         "canvaOAuth": services().canva_oauth.status(),
         "limits": {
             "captureConcurrency": config.capture_concurrency,
-            "reconstructionConcurrency": config.job_concurrency,
             "captureTimeoutMs": config.capture_timeout_ms,
             "maxCaptureBytes": config.max_capture_bytes,
             "maxApiResponseBytes": config.max_api_response_bytes,
@@ -265,189 +256,6 @@ def page_thumbnail(image_base64: str, maximum_size: int = 320) -> str:
         buffer = io.BytesIO()
         thumbnail.save(buffer, format="JPEG", quality=82, optimize=True)
     return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
-
-
-@api.route("/api/reconstruction-jobs", methods=["POST", "OPTIONS"])
-def create_reconstruction_job():
-    if request.method == "OPTIONS":
-        return "", 204
-    payload = ReconstructionRequest.model_validate(request.get_json(silent=False) or {})
-    capture_id = validate_uuid(payload.capture_id)
-    page_ids = [validate_uuid(page_id) for page_id in payload.page_ids]
-    capture = services().store.get_capture(capture_id)
-    if not capture:
-        return error_response("CAPTURE_NOT_FOUND", "Capture expired or does not exist.", 404)
-    valid_ids = {page.id for page in capture.pages}
-    if any(page_id not in valid_ids for page_id in page_ids):
-        return error_response("INVALID_PAGE_SELECTION", "One or more selected pages do not belong to this capture.", 400)
-    if len(set(page_ids)) != len(page_ids):
-        return error_response("INVALID_PAGE_SELECTION", "Selected page IDs must be unique.", 400)
-    config = settings()
-    if not config.openai_api_key:
-        return error_response(
-            "AI_NOT_CONFIGURED",
-            "Set OPENAI_API_KEY in the converter environment, then restart the converter.",
-            503,
-        )
-    job = services().store.create_job(capture_id, page_ids)
-    try:
-        services().jobs.submit(job)
-    except ServiceError as error:
-        services().store.update_job(
-            job.id, status="failed", message=error.message,
-            error={"code": error.code, "message": error.message},
-        )
-        raise
-    return jsonify({"jobId": job.id}), 202
-
-
-@api.route("/api/reconstruction-jobs/<job_id>", methods=["GET", "DELETE", "OPTIONS"])
-def reconstruction_job(job_id: str):
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        normalized_id = validate_uuid(job_id)
-    except (ValueError, TypeError):
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    if request.method == "DELETE":
-        job = services().jobs.cancel(normalized_id)
-        return (jsonify({"status": job.status}), 202) if job else error_response("JOB_NOT_FOUND", "Job not found.", 404)
-    job = services().store.get_job(normalized_id)
-    if not job:
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    payload = job.json_dict()
-    payload.pop("cancelled", None)
-    if job.status != "completed":
-        payload.pop("result", None)
-    elif payload.get("result"):
-        for asset_id, asset in payload["result"].get("assets", {}).items():
-            if asset.pop("dataBase64", None) is not None:
-                path = url_for("api.reconstruction_job_asset", job_id=job.id, asset_id=asset_id, _external=False)
-                # The Figma development manifest permits this canonical loopback
-                # origin. Keeping a full URL also preserves the Design IR HttpUrl
-                # contract returned by the completed job.
-                asset["url"] = f"http://localhost:{settings().port}{path}"
-    return bounded_json(payload)
-
-
-@api.route("/api/reconstruction-jobs/<job_id>/assets/<asset_id>", methods=["GET", "OPTIONS"])
-def reconstruction_job_asset(job_id: str, asset_id: str):
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        normalized_id = validate_uuid(job_id)
-    except (ValueError, TypeError):
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    if not services().store.get_job(normalized_id):
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    item = services().store.get_job_asset(normalized_id, asset_id)
-    if not item:
-        return error_response("ASSET_NOT_FOUND", "Reconstruction asset expired or does not exist.", 404)
-    image_bytes, mime_type = item
-    if len(image_bytes) > 25 * 1024 * 1024:
-        return error_response("CAPTURE_LIMIT_EXCEEDED", "Reconstruction asset exceeds the 25MB image limit.", 413)
-    response = send_file(io.BytesIO(image_bytes), mimetype=mime_type, download_name=f"{asset_id}.bin")
-    response.set_etag(hashlib.sha256(image_bytes).hexdigest())
-    response.cache_control.private = True
-    response.cache_control.max_age = settings().artifact_ttl_seconds
-    return response.make_conditional(request)
-
-
-@api.route("/api/reconstruction-jobs/<job_id>/figma-qa", methods=["GET", "POST", "OPTIONS"])
-def reconstruction_job_figma_qa(job_id: str):
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        normalized_id = validate_uuid(job_id)
-    except (ValueError, TypeError):
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    job = services().store.get_job(normalized_id)
-    if not job:
-        return error_response("JOB_NOT_FOUND", "Job expired or does not exist.", 404)
-    if request.method == "GET":
-        report = services().store.get_figma_qa_report(normalized_id)
-        return jsonify(report) if report else error_response("FIGMA_QA_NOT_FOUND", "No final Figma QA report exists for this job.", 404)
-    if job.status != "completed" or not job.result:
-        return error_response("FIGMA_QA_NOT_READY", "The reconstruction job must complete before final Figma QA is submitted.", 409)
-    capture = services().store.get_capture(job.capture_id)
-    if not capture:
-        return error_response("CAPTURE_NOT_FOUND", "Capture expired before final Figma QA was submitted.", 404)
-
-    submission = FigmaQaSubmission.model_validate(request.get_json(silent=False) or {})
-    submitted_ids = [page.page_id for page in submission.pages]
-    if len(set(submitted_ids)) != len(submitted_ids) or set(submitted_ids) != set(job.page_ids):
-        return error_response("INVALID_FIGMA_QA", "Figma QA must contain each reconstructed page exactly once.", 400)
-    capture_pages = {page.id: page for page in capture.pages}
-    result_pages = {page.id: page for page in job.result.pages}
-    if any(page_id not in capture_pages or page_id not in result_pages for page_id in submitted_ids):
-        return error_response("INVALID_FIGMA_QA", "Figma QA contains a page that is not present in the capture and reconstruction result.", 400)
-
-    thresholds = {
-        "exactTextRate": 0.95,
-        "nativeCoverage": 0.80,
-        "figmaVisualSimilarity": 0.95,
-        "missingRegionRate": 0,
-        "duplicateTextBlocks": 0,
-    }
-    page_reports = []
-    for submitted in submission.pages:
-        captured = capture_pages[submitted.page_id]
-        reconstructed = result_pages[submitted.page_id]
-        metrics = reconstructed.metrics
-        checks = {
-            "exportDimensions": submitted.export_width == captured.width and submitted.export_height == captured.height,
-            "exactText": metrics.exact_text_rate >= thresholds["exactTextRate"],
-            "nativeCoverage": metrics.native_coverage >= thresholds["nativeCoverage"],
-            "figmaVisualSimilarity": submitted.visual_similarity >= thresholds["figmaVisualSimilarity"],
-            "zeroMissingVisibleRegions": metrics.missing_region_rate <= thresholds["missingRegionRate"],
-            "zeroDuplicateVisibleText": metrics.duplicate_text_blocks <= thresholds["duplicateTextBlocks"],
-        }
-        page_reports.append({
-            **submitted.json_dict(),
-            "pageIndex": captured.index,
-            "logicalWidth": captured.width,
-            "logicalHeight": captured.height,
-            "backendMetrics": metrics.json_dict(),
-            "checks": checks,
-            "passed": all(checks.values()),
-        })
-
-    total_area = sum(page["logicalWidth"] * page["logicalHeight"] for page in page_reports) or 1
-    weighted = lambda key, source=None: sum(
-        (page["logicalWidth"] * page["logicalHeight"]) * ((page.get(source) or {}).get(key, 0) if source else page.get(key, 0))
-        for page in page_reports
-    ) / total_area
-    report = {
-        "schemaVersion": 1,
-        "jobId": job.id,
-        "captureId": job.capture_id,
-        # Prove which captured source produced the evidence without persisting
-        # a public Canva share token in a checked-in baseline report.
-        "sourceFingerprint": hashlib.sha256(capture.source_url.encode("utf-8")).hexdigest(),
-        "createdAt": utc_now(),
-        "thresholds": thresholds,
-        "pages": sorted(page_reports, key=lambda page: page["pageIndex"]),
-        "summary": {
-            "pageCount": len(page_reports),
-            "passedPages": sum(1 for page in page_reports if page["passed"]),
-            "figmaVisualSimilarity": weighted("visualSimilarity"),
-            "figmaPixelDifference": weighted("pixelDifference"),
-            "mismatchRate": weighted("mismatchRate"),
-            "exactTextRate": weighted("exactTextRate", "backendMetrics"),
-            "nativeCoverage": weighted("nativeCoverage", "backendMetrics"),
-            "fallbackCoverage": weighted("fallbackCoverage", "backendMetrics"),
-            "missingRegionRate": weighted("missingRegionRate", "backendMetrics"),
-            "duplicateTextBlocks": sum(page["backendMetrics"]["duplicateTextBlocks"] for page in page_reports),
-            "missingFonts": sorted({
-                font
-                for page in page_reports
-                for font in page["backendMetrics"]["missingFonts"]
-            }),
-        },
-        "passed": all(page["passed"] for page in page_reports),
-    }
-    services().store.put_figma_qa_report(normalized_id, report)
-    return bounded_json(report, 201)
 
 
 @api.app_errorhandler(ServiceError)

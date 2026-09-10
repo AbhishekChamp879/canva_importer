@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Canva to Editable Figma</title>
+  <title>Canva to Figma Pages</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -43,7 +43,7 @@
     .page-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
     .page-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .selection-actions { margin-top: 10px; }
-    .import-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+    .import-actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 9px; }
     .progress-track { height: 6px; overflow: hidden; margin: 9px 0 8px; border-radius: 99px; background: var(--border); }
     .progress-bar { width: 0; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease; }
     .activity { max-height: 115px; overflow: auto; margin: 8px 0 0; padding: 9px; border-radius: 6px; background: var(--bg); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
@@ -62,7 +62,7 @@
   <div class="app">
     <header>
       <h1>Canva → Figma</h1>
-      <p>Import every detected Canva page · editable AI is optional</p>
+      <p>Import Canva pages as images in Figma</p>
     </header>
 
     <main>
@@ -76,7 +76,7 @@
 
       <section class="panel">
         <div class="label-row">
-          <strong>Connect Canva (trial)</strong>
+          <strong>Connect Canva</strong>
           <button id="canva-connect" type="button">Connect Canva</button>
         </div>
         <div class="oauth-status"><span id="canva-oauth-dot" class="oauth-dot"></span><span id="canva-oauth-status">Checking configuration…</span></div>
@@ -107,9 +107,8 @@
         </div>
         <div class="import-actions">
           <button id="import-images" class="primary" type="button">Import page images</button>
-          <button id="reconstruct" type="button">Make editable (AI)</button>
         </div>
-        <p class="hint" style="margin-top:8px">Page images preserve the exact appearance. AI reconstruction creates editable layers but may differ from Canva.</p>
+        <p class="hint" style="margin-top:8px">Each selected page becomes an image inside its own Figma frame.</p>
       </section>
 
       <section id="job-panel" class="panel hidden">
@@ -147,34 +146,25 @@
       "canva-connect", "canva-oauth-dot", "canva-oauth-status", "canva-design-controls",
       "canva-design-search", "canva-design-search-button", "canva-design-select", "canva-design-load",
       "preview-panel", "design-title", "page-count", "pages", "toggle-pages", "selected-count", "import-images",
-      "reconstruct", "job-panel", "job-status", "job-percent", "progress-bar", "job-message",
+      "job-panel", "job-status", "job-percent", "progress-bar", "job-message",
       "cancel-job", "activity", "activity-state", "summary", "close"
     ].map(id => [id, document.getElementById(id)]));
 
     let capture = null;
     let activeCaptureJobId = null;
-    let activeJobId = null;
     let activeImageImport = null;
-    let renderingDocument = false;
-    let renderTimer = null;
     let imagePluginWaiter = null;
     let capturePollTimer = null;
-    let pollTimer = null;
     let oauthPollTimer = null;
     let oauthPollDeadline = 0;
-    const figmaQaComparisons = new Map();
 
     const BACKEND_BASE = "http://localhost:3000";
-
-    function backendBase() {
-      return BACKEND_BASE;
-    }
 
     async function api(path, options) {
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 30000);
       try {
-        const response = await fetch(`${backendBase()}${path}`, {
+        const response = await fetch(`${BACKEND_BASE}${path}`, {
           ...options,
           signal: controller.signal,
           headers: { "Content-Type": "application/json", ...((options && options.headers) || {}) },
@@ -304,7 +294,6 @@
       const designId = elements["canva-design-select"].value;
       if (!designId) return;
       clearCapturePolling();
-      clearJobPolling();
       setCaptureBusy(true);
       elements["preview-panel"].classList.add("hidden");
       elements["job-panel"].classList.remove("hidden");
@@ -324,9 +313,8 @@
     function updateSelection() {
       const boxes = [...elements.pages.querySelectorAll('input[type="checkbox"]')];
       const selected = boxes.filter(box => box.checked).length;
-      const busy = Boolean(activeCaptureJobId || activeJobId || activeImageImport || renderingDocument);
+      const busy = Boolean(activeCaptureJobId || activeImageImport);
       elements["selected-count"].textContent = `${selected} of ${boxes.length} selected`;
-      elements.reconstruct.disabled = selected === 0 || busy;
       elements["import-images"].disabled = selected === 0 || busy;
       elements["toggle-pages"].disabled = busy;
       elements["toggle-pages"].textContent = selected === boxes.length ? "Clear all" : "Select all";
@@ -368,7 +356,6 @@
         return;
       }
       clearCapturePolling();
-      clearJobPolling();
       setCaptureBusy(true);
       elements["preview-panel"].classList.add("hidden");
       elements["job-panel"].classList.add("hidden");
@@ -407,7 +394,7 @@
           renderPages(result);
           elements["cancel-job"].disabled = true;
           setCaptureBusy(false);
-          setActivity("Pages ready. Import exact images now, or use optional editable AI reconstruction.", "Pages ready");
+          setActivity("Pages ready. Select the pages you want and import them into Figma.", "Pages ready");
           return;
         }
         if (job.status === "failed" || job.status === "cancelled") {
@@ -457,7 +444,7 @@
       if (typeof page.imageUrl !== "string" || !page.imageUrl.startsWith("/api/captures/")) {
         throw new Error(`Page ${page.index + 1} has no trusted full-resolution image URL.`);
       }
-      const response = await fetch(`${backendBase()}${page.imageUrl}`, {
+      const response = await fetch(`${BACKEND_BASE}${page.imageUrl}`, {
         method: "GET",
         headers: { Accept: "image/png" },
         signal,
@@ -527,192 +514,12 @@
       }
     }
 
-    function clearJobPolling() {
-      if (pollTimer) window.clearTimeout(pollTimer);
-      pollTimer = null;
-      activeJobId = null;
-      updateSelection();
-    }
-
     function updateJob(job) {
       const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
       elements["job-status"].textContent = String(job.status || "working").replace(/^./, value => value.toUpperCase());
       elements["job-percent"].textContent = `${progress}%`;
       elements["progress-bar"].style.width = `${progress}%`;
       elements["job-message"].textContent = job.message || "Working…";
-    }
-
-    function startDocumentRender(document, jobId) {
-      for (const asset of Object.values((document && document.assets) || {})) {
-        if (typeof asset.url === "string" && asset.url.startsWith("/api/")) {
-          asset.url = `${backendBase()}${asset.url}`;
-        }
-      }
-      renderingDocument = true;
-      updateSelection();
-      if (renderTimer) window.clearTimeout(renderTimer);
-      renderTimer = window.setTimeout(() => {
-        renderingDocument = false;
-        renderTimer = null;
-        updateSelection();
-        setActivity("Figma did not finish rendering within five minutes.", "Render timeout", true);
-      }, 300000);
-      parent.postMessage({ pluginMessage: { type: "import-design", document, jobId } }, "*");
-    }
-
-    function finishDocumentRender() {
-      renderingDocument = false;
-      if (renderTimer) window.clearTimeout(renderTimer);
-      renderTimer = null;
-      updateSelection();
-    }
-
-    async function pollJob() {
-      if (!activeJobId) return;
-      const requestedJobId = activeJobId;
-      try {
-        const job = await api(`/api/reconstruction-jobs/${requestedJobId}`);
-        if (activeJobId !== requestedJobId) return;
-        updateJob(job);
-        if (job.status === "completed") {
-          const completedJobId = requestedJobId;
-          activeJobId = null;
-          elements["cancel-job"].disabled = true;
-          setActivity("Reconstruction complete. Creating native Figma layers…", "Rendering");
-          startDocumentRender(job.result, completedJobId);
-          return;
-        }
-        if (job.status === "failed" || job.status === "cancelled") {
-          const detail = job.error && job.error.message ? job.error.message : job.message;
-          clearJobPolling();
-          setActivity(detail || `Job ${job.status}.`, job.status === "failed" ? "Conversion failed" : "Cancelled", job.status === "failed");
-          return;
-        }
-        pollTimer = window.setTimeout(pollJob, 900);
-      } catch (error) {
-        clearJobPolling();
-        setActivity(error.message, "Job failed", true);
-      }
-    }
-
-    async function reconstruct() {
-      const pageIds = selectedPageIds();
-      if (!capture || !pageIds.length) return;
-      elements["job-panel"].classList.remove("hidden");
-      elements["cancel-job"].disabled = false;
-      setActivity("Submitting selected pages for OCR and layout reconstruction…", "Queued");
-      try {
-        const result = await api("/api/reconstruction-jobs", {
-          method: "POST",
-          body: JSON.stringify({ captureId: capture.captureId, pageIds }),
-        });
-        activeJobId = result.jobId;
-        updateSelection();
-        pollJob();
-      } catch (error) {
-        setActivity(`${error.code || "JOB_FAILED"}: ${error.message}`, "Conversion failed", true);
-      }
-    }
-
-    async function sha256Hex(bytes) {
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
-    }
-
-    async function compareFigmaExport(message) {
-      const page = capture && capture.pages.find(item => item.id === message.pageId);
-      if (!page) throw new Error(`Final Figma QA could not find captured page ${message.pageId}.`);
-      const exportBytes = message.imageBytes instanceof Uint8Array ? message.imageBytes : new Uint8Array(message.imageBytes || []);
-      if (!exportBytes.length || exportBytes.length > 25 * 1024 * 1024) throw new Error(`Final Figma QA export for page ${page.index + 1} is invalid.`);
-      const referenceBytes = await fetchFullPageImage(page);
-      const [exported, reference] = await Promise.all([
-        createImageBitmap(new Blob([exportBytes], { type: "image/png" })),
-        createImageBitmap(new Blob([referenceBytes], { type: "image/png" })),
-      ]);
-      try {
-        if (exported.width !== page.width || exported.height !== page.height) {
-          throw new Error(`Final Figma export for page ${page.index + 1} is ${exported.width}×${exported.height}; expected ${page.width}×${page.height}.`);
-        }
-        const scale = Math.min(1, 2048 / Math.max(exported.width, exported.height));
-        const width = Math.max(1, Math.round(exported.width * scale));
-        const height = Math.max(1, Math.round(exported.height * scale));
-        const sourceCanvas = document.createElement("canvas");
-        const figmaCanvas = document.createElement("canvas");
-        sourceCanvas.width = figmaCanvas.width = width;
-        sourceCanvas.height = figmaCanvas.height = height;
-        const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
-        const figmaContext = figmaCanvas.getContext("2d", { willReadFrequently: true });
-        sourceContext.drawImage(reference, 0, 0, width, height);
-        figmaContext.drawImage(exported, 0, 0, width, height);
-        const sourcePixels = sourceContext.getImageData(0, 0, width, height).data;
-        const figmaPixels = figmaContext.getImageData(0, 0, width, height).data;
-        let totalDifference = 0;
-        let mismatched = 0;
-        const pixels = width * height;
-        for (let index = 0; index < sourcePixels.length; index += 4) {
-          const red = Math.abs(sourcePixels[index] - figmaPixels[index]);
-          const green = Math.abs(sourcePixels[index + 1] - figmaPixels[index + 1]);
-          const blue = Math.abs(sourcePixels[index + 2] - figmaPixels[index + 2]);
-          totalDifference += red + green + blue;
-          if (Math.max(red, green, blue) >= 18) mismatched += 1;
-        }
-        const pixelDifference = totalDifference / (pixels * 3 * 255);
-        return {
-          pageId: page.id,
-          exportWidth: exported.width,
-          exportHeight: exported.height,
-          comparedWidth: width,
-          comparedHeight: height,
-          exportByteLength: exportBytes.length,
-          exportSha256: await sha256Hex(exportBytes),
-          pixelDifference,
-          visualSimilarity: 1 - pixelDifference,
-          mismatchRate: mismatched / pixels,
-        };
-      } finally {
-        if (typeof exported.close === "function") exported.close();
-        if (typeof reference.close === "function") reference.close();
-      }
-    }
-
-    function registerFigmaQaExport(message) {
-      const jobId = String(message.jobId || "");
-      if (!jobId) return;
-      const comparisons = figmaQaComparisons.get(jobId) || [];
-      if (comparisons.some(item => item.pageId === message.pageId)) return;
-      comparisons.push({ pageId: message.pageId, promise: compareFigmaExport(message) });
-      figmaQaComparisons.set(jobId, comparisons);
-    }
-
-    async function finalizeFigmaQa(report) {
-      const jobId = report && report.reconstructionJobId;
-      if (!jobId) return null;
-      const comparisons = figmaQaComparisons.get(jobId) || [];
-      figmaQaComparisons.delete(jobId);
-      const settled = await Promise.allSettled(comparisons.map(item => item.promise));
-      const pages = settled.filter(item => item.status === "fulfilled").map(item => item.value);
-      for (const failed of settled.filter(item => item.status === "rejected")) {
-        report.warnings.push(`Final Figma QA: ${failed.reason && failed.reason.message ? failed.reason.message : String(failed.reason)}`);
-      }
-      if (pages.length !== report.pages) {
-        report.warnings.push(`Final Figma QA compared ${pages.length} of ${report.pages} page(s).`);
-        return null;
-      }
-      try {
-        const qa = await api(`/api/reconstruction-jobs/${jobId}/figma-qa`, {
-          method: "POST",
-          body: JSON.stringify({ pages }),
-        });
-        report.finalFigmaVisualSimilarity = qa.summary.figmaVisualSimilarity;
-        report.finalFigmaPixelDifference = qa.summary.figmaPixelDifference;
-        report.finalFigmaMismatchRate = qa.summary.mismatchRate;
-        report.phase1QaPassed = qa.passed;
-        if (!qa.passed) report.warnings.push(`Final Figma QA passed ${qa.summary.passedPages} of ${qa.summary.pageCount} page(s).`);
-        return qa;
-      } catch (error) {
-        report.warnings.push(`Final Figma QA submission failed: ${error.message}`);
-        return null;
-      }
     }
 
     async function cancelJob() {
@@ -742,51 +549,15 @@
         }
         return;
       }
-      if (!activeJobId) return;
-      const jobId = activeJobId;
-      elements["cancel-job"].disabled = true;
-      try {
-        await api(`/api/reconstruction-jobs/${jobId}`, { method: "DELETE" });
-        clearJobPolling();
-        setActivity("Conversion cancelled.", "Cancelled");
-      } catch (error) {
-        setActivity(error.message, "Cancellation failed", true);
-      }
     }
 
     function showSummary(report) {
       elements.summary.replaceChildren();
-      const missingFonts = Array.isArray(report.missingFonts) ? report.missingFonts : [];
-      const fontSubstitutions = Array.isArray(report.fontSubstitutions) ? report.fontSubstitutions : [];
       const warnings = Array.isArray(report.warnings) ? report.warnings : [];
       const lines = [
-        `${report.pages} page(s) imported`,
-        `${report.fallbacks} raster fallback layer(s)`,
-        `${Number(report.originalAssets || 0)} original Canva image asset(s)`,
-        `${Number(report.croppedImages || 0)} screenshot-cropped image layer(s)`,
-        `${Number(report.clippedGroups || 0)} clipped group(s)`,
-        `${Number(report.gradientFills || 0)} native gradient fill(s)`,
-        `${Number(report.nativeEffects || 0)} native effect(s)`,
-        `${report.failedNodes} failed layer(s)`,
-        `${missingFonts.length} missing font(s)`,
-        `${fontSubstitutions.length} font substitution(s)`,
+        `${report.pages} page(s) imported as images`,
+        ...warnings.map(warning => `⚠ ${warning}`),
       ];
-      if (Number.isFinite(report.nativeCoverage)) lines.push(`${Math.round(report.nativeCoverage * 100)}% native coverage`);
-      if (Number.isFinite(report.fallbackCoverage)) lines.push(`${Math.round(report.fallbackCoverage * 100)}% raster fallback coverage`);
-      if (Number.isFinite(report.exactTextRate)) lines.push(`${Math.round(report.exactTextRate * 100)}% exact text score`);
-      if (Number.isFinite(report.visualSimilarity)) lines.push(`${Math.round(report.visualSimilarity * 100)}% visual similarity`);
-      if (Number.isFinite(report.pixelDifference)) lines.push(`${Math.round(report.pixelDifference * 100)}% pixel difference`);
-      if (Number.isFinite(report.missingRegionRate)) lines.push(`${Math.round(report.missingRegionRate * 100)}% missing-region rate`);
-      if (Number.isFinite(report.duplicateTextBlocks)) lines.push(`${report.duplicateTextBlocks} duplicate text block(s)`);
-      if (Number.isFinite(report.finalFigmaVisualSimilarity)) lines.push(`${Math.round(report.finalFigmaVisualSimilarity * 100)}% final Figma visual similarity`);
-      if (Number.isFinite(report.finalFigmaMismatchRate)) lines.push(`${Math.round(report.finalFigmaMismatchRate * 100)}% materially different pixels`);
-      if (typeof report.phase1QaPassed === "boolean") lines.push(`Phase 1 page QA: ${report.phase1QaPassed ? "passed" : "failed"}`);
-      if (report.reconstructionJobId) lines.push(`QA job ID: ${report.reconstructionJobId}`);
-      if (missingFonts.length) lines.push(`Missing: ${missingFonts.join(", ")}`);
-      if (fontSubstitutions.length) lines.push(`Substituted: ${fontSubstitutions.join(", ")}`);
-      if (warnings.length) lines.push(`${warnings.length} warning(s)`);
-      for (const warning of warnings.slice(0, 8)) lines.push(`⚠ ${warning}`);
-      if (warnings.length > 8) lines.push(`…and ${warnings.length - 8} more warning(s)`);
       for (const line of lines) {
         const item = document.createElement("li");
         item.textContent = line;
@@ -802,7 +573,6 @@
     elements["canva-design-select"].addEventListener("change", () => { elements["canva-design-load"].disabled = !elements["canva-design-select"].value; });
     elements["canva-design-load"].addEventListener("click", captureOAuthDesign);
     elements["import-images"].addEventListener("click", importPageImages);
-    elements.reconstruct.addEventListener("click", reconstruct);
     elements["cancel-job"].addEventListener("click", cancelJob);
     elements.close.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "close-plugin" } }, "*"));
     elements["toggle-pages"].addEventListener("click", () => {
@@ -814,10 +584,6 @@
     window.onmessage = async event => {
       const message = event.data && event.data.pluginMessage;
       if (!message) return;
-      if (message.type === "figma-qa-export") {
-        registerFigmaQaExport(message);
-        return;
-      }
       if (imagePluginWaiter && message.sessionId === imagePluginWaiter.sessionId) {
         if (message.type === imagePluginWaiter.expectedType) {
           const waiter = imagePluginWaiter;
@@ -834,20 +600,10 @@
         }
       }
       if (message.type === "import-completed") {
-        finishDocumentRender();
-        await finalizeFigmaQa(message.report);
         showSummary(message.report);
         updateJob({ status: "completed", progress: 100, message: `${message.report.pages} page(s) imported.` });
-        const missingFonts = Array.isArray(message.report.missingFonts) ? message.report.missingFonts.length : 0;
-        const substitutions = Number(message.report.fallbacks || 0) + Number(message.report.croppedImages || 0) + Number(message.report.failedNodes || 0) + missingFonts;
-        const completedMessage = message.report.mode === "page-images"
-          ? "Exact full-resolution Canva pages imported successfully."
-          : substitutions
-            ? `Editable import completed with ${substitutions} substitution(s) or warning layer(s). Review the summary below.`
-            : "Native Figma layers created successfully.";
-        setActivity(completedMessage, substitutions ? "Completed with warnings" : "Completed");
+        setActivity("Full-resolution Canva pages imported successfully.", "Completed");
       } else if (message.type === "import-failed") {
-        finishDocumentRender();
         setActivity(message.message || "Figma rendering failed.", "Import failed", true);
       }
     };

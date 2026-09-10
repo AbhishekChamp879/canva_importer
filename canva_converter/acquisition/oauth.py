@@ -321,8 +321,6 @@ class CanvaConnectClient:
 
 
 class CanvaOAuthAcquisitionProvider:
-    id = "canva-connect-oauth-png-v1"
-
     def __init__(self, settings: Settings, client: CanvaConnectClient):
         self.settings = settings
         self.client = client
@@ -368,7 +366,7 @@ class CanvaOAuthAcquisitionProvider:
                 raise AcquisitionError("CAPTURE_LIMIT_EXCEEDED", "Official Canva page exports exceed the configured capture byte limit.")
             pages.append(CapturedPage(
                 id=new_id(), index=index, width=width, height=height,
-                screenshotBase64=base64.b64encode(normalized).decode("ascii"), textHints=[], imageHints=[],
+                screenshotBase64=base64.b64encode(normalized).decode("ascii"),
             ))
             progress(f"[completed] Page {index + 1}: official Canva PNG ready.")
         if not pages:

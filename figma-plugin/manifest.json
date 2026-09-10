@@ -1,6 +1,6 @@
 {
-  "name": "Canva to Editable Figma",
-  "id": "canva-to-editable-figma-local",
+  "name": "Canva to Figma Pages",
+  "id": "canva-to-figma-pages-local",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",

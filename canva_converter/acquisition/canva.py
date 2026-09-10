@@ -11,7 +11,7 @@ from PIL import Image
 
 from ..config import Settings
 from ..errors import AcquisitionError
-from ..models import CapturedPage, DomImageHint, DomTextHint, new_id
+from ..models import CapturedPage, new_id
 from .browser_state import classify_browser_state
 from .browser_runtime import PortableBrowserRuntime
 from .coordinator import CaptureCoordinator
@@ -23,72 +23,7 @@ Progress = Callable[[str], None]
 Cancelled = Callable[[], bool]
 
 
-TEXT_HINT_SCRIPT = r"""
-(pageBox) => {
-  const layers = [];
-  const logicalScale = Number(pageBox.logicalScale) || 1;
-  const blacklist = new Set(['share','create with canva','download','present','more','open in canva','sign up','log in']);
-  for (const el of document.querySelectorAll('span,p,h1,h2,h3,h4,h5,h6,[class*="text"],[role="heading"]')) {
-    const text = (el.innerText || '').trim();
-    if (text.length <= 1 || blacklist.has(text.toLowerCase()) || /^\d+\s*\/\s*\d+$/.test(text)) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 5 || rect.height < 5 || rect.right < pageBox.x-10 || rect.left > pageBox.x+pageBox.width+10 || rect.bottom < pageBox.y-10 || rect.top > pageBox.y+pageBox.height+10) continue;
-    const relY = rect.top-pageBox.y, relBottom = rect.bottom-pageBox.y;
-    if (relY < -5 || relBottom > pageBox.height+5) continue;
-    const style = getComputedStyle(el);
-    if (style.opacity === '0' || style.visibility === 'hidden' || style.display === 'none') continue;
-    layers.push({text,x:Math.max(0,rect.left-pageBox.x)*logicalScale,y:Math.max(0,rect.top-pageBox.y)*logicalScale,width:rect.width*logicalScale,height:rect.height*logicalScale,fontSize:(parseFloat(style.fontSize)||16)*logicalScale,fontFamily:style.fontFamily||'Inter',fontWeight:style.fontWeight||'400',fontStyle:style.fontStyle||'normal',color:style.color||'rgb(0,0,0)',textAlign:style.textAlign||'left',lineHeight:parseFloat(style.lineHeight)?parseFloat(style.lineHeight)*logicalScale:null,letterSpacing:parseFloat(style.letterSpacing)?parseFloat(style.letterSpacing)*logicalScale:null,textDecoration:style.textDecorationLine||'none'});
-  }
-  const result=[];
-  for (const layer of layers) if (!result.some(existing => existing.text===layer.text && Math.abs(existing.x-layer.x)<30 && Math.abs(existing.y-layer.y)<30)) result.push(layer);
-  return result.slice(0,200);
-}
-"""
-
-
-IMAGE_HINT_SCRIPT = r"""
-(pageBox) => {
-  const layers=[];
-  const logicalScale = Number(pageBox.logicalScale) || 1;
-  const positionValue=(token,axis) => {
-    const value=String(token||'').toLowerCase();
-    if (value==='left'||value==='top') return 0;
-    if (value==='right'||value==='bottom') return 1;
-    if (value==='center') return 0.5;
-    if (value.endsWith('%')) return Math.max(0,Math.min(1,(parseFloat(value)||50)/100));
-    return 0.5;
-  };
-  for (const img of document.querySelectorAll('img')) {
-    const src=img.currentSrc||img.src||img.getAttribute('data-src')||'';
-    if (!src || src.startsWith('data:') || src.startsWith('blob:')) continue;
-    const rect=img.getBoundingClientRect();
-    if (rect.width<20 || rect.height<20 || rect.right<pageBox.x-10 || rect.left>pageBox.x+pageBox.width+10 || rect.bottom<pageBox.y-10 || rect.top>pageBox.y+pageBox.height+10) continue;
-    // A page-sized IMG is commonly Canva's flattened viewer render, not an
-    // editable source layer. Treat it as uncertain and preserve screenshot
-    // pixels rather than re-introducing a full-page duplicate asset.
-    if ((rect.width*rect.height)/(pageBox.width*pageBox.height) >= 0.92) continue;
-    const relX=rect.left-pageBox.x, relRight=rect.right-pageBox.x;
-    const relY=rect.top-pageBox.y, relBottom=rect.bottom-pageBox.y;
-    // Partially clipped DOM images need additional crop geometry that this
-    // hint contract cannot prove. Exclude them and retain screenshot fallback.
-    if (relX < -5 || relRight > pageBox.width+5 || relY < -5 || relBottom > pageBox.height+5) continue;
-    const style=getComputedStyle(img);
-    if (style.opacity==='0'||style.visibility==='hidden'||style.display==='none') continue;
-    const tokens=String(style.objectPosition||'50% 50%').trim().split(/\s+/);
-    const px=positionValue(tokens[0], 'x');
-    const py=positionValue(tokens[1]||tokens[0], 'y');
-    const radii=[style.borderTopLeftRadius,style.borderTopRightRadius,style.borderBottomRightRadius,style.borderBottomLeftRadius].map(value=>parseFloat(value)||0);
-    layers.push({src,x:Math.max(0,rect.left-pageBox.x)*logicalScale,y:Math.max(0,rect.top-pageBox.y)*logicalScale,width:rect.width*logicalScale,height:rect.height*logicalScale,alt:img.alt||'',naturalWidth:img.naturalWidth||null,naturalHeight:img.naturalHeight||null,objectFit:style.objectFit||'fill',objectPositionX:px,objectPositionY:py,cornerRadius:Math.min(...radii)*logicalScale});
-  }
-  const seen=new Set();
-  return layers.filter(layer => {const key=`${Math.round(layer.x)}|${Math.round(layer.y)}|${Math.round(layer.width)}`;if(seen.has(key))return false;seen.add(key);return true;}).slice(0,100);
-}
-"""
-
-
 class PublicCanvaAcquisitionProvider:
-    id = "canva-public-url-python-v1"
-
     def __init__(self, settings: Settings, coordinator: CaptureCoordinator | None = None):
         self.settings = settings
         self.coordinator = coordinator or CaptureCoordinator(settings.capture_concurrency)
@@ -222,8 +157,6 @@ class PublicCanvaAcquisitionProvider:
                         if preview is None:
                             raise AcquisitionError("SOURCE_NOT_PUBLIC", 'Canva did not expose a public page preview. Set link access to "Anyone with the link" with view permission.')
                         width, height, screenshot = preview
-                        text_hints: list[DomTextHint] = []
-                        image_hints: list[DomImageHint] = []
                     else:
                         await locator.scroll_into_view_if_needed(timeout=10_000)
                         screenshot_bytes, box = await self._stable_locator_screenshot(locator)
@@ -252,9 +185,6 @@ class PublicCanvaAcquisitionProvider:
                             )
                         captured_fingerprints.setdefault(captured_fingerprint, {"pageNumber": page_number, "identity": locator_identity})
                         screenshot = base64.b64encode(screenshot_bytes).decode("ascii")
-                        hint_box = {**box, "logicalScale": 1 / logical_scale}
-                        text_hints = [DomTextHint.model_validate(item) for item in await page.evaluate(TEXT_HINT_SCRIPT, hint_box)]
-                        image_hints = [DomImageHint.model_validate(item) for item in await page.evaluate(IMAGE_HINT_SCRIPT, hint_box)]
                     if width > 8192 or height > 8192:
                         raise AcquisitionError("CAPTURE_LIMIT_EXCEEDED", f"Page {page_number} exceeds the 8192px logical dimension limit.")
                     if len(base64.b64decode(screenshot, validate=True)) > 25 * 1024 * 1024:
@@ -265,7 +195,7 @@ class PublicCanvaAcquisitionProvider:
                             "CAPTURE_LIMIT_EXCEEDED",
                             f"Captured pages exceed the configured {self.settings.max_capture_bytes // (1024 * 1024)}MB design limit.",
                         )
-                    captured = CapturedPage(id=new_id(), index=page_number - 1, width=width, height=height, screenshotBase64=screenshot, textHints=text_hints, imageHints=image_hints)
+                    captured = CapturedPage(id=new_id(), index=page_number - 1, width=width, height=height, screenshotBase64=screenshot)
                     pages.append(captured)
                     self._ensure_not_cancelled(is_cancelled)
                     progress(f"[capturing] Page {page_number}: {width}×{height} ({captured.orientation}).")

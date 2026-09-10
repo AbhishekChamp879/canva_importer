@@ -10,9 +10,19 @@ PLUGIN = ROOT / "figma-plugin"
 
 
 class FigmaPluginContractTests(unittest.TestCase):
+    def test_plugin_has_only_page_image_import(self):
+        ui = (PLUGIN / "ui.html").read_text(encoding="utf-8")
+        renderer = (PLUGIN / "code.js").read_text(encoding="utf-8")
+        self.assertNotIn('id="reconstruct"', ui)
+        self.assertNotIn("Make editable", ui)
+        self.assertNotIn("reconstruction-jobs", ui)
+        self.assertNotIn('"import-design"', renderer)
+        self.assertNotIn("createText", renderer)
+        self.assertNotIn("figma-qa", renderer + ui)
+
     def test_manifest_points_to_existing_runtime_files(self):
         manifest = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["id"], "canva-to-editable-figma-local")
+        self.assertEqual(manifest["id"], "canva-to-figma-pages-local")
         self.assertEqual(manifest["main"], "code.js")
         self.assertEqual(manifest["ui"], "ui.html")
         self.assertTrue((PLUGIN / manifest["main"]).is_file())
@@ -26,7 +36,6 @@ class FigmaPluginContractTests(unittest.TestCase):
     def test_ui_does_not_use_untrusted_inner_html(self):
         ui = (PLUGIN / "ui.html").read_text(encoding="utf-8")
         self.assertNotIn(".innerHTML", ui)
-        self.assertIn('type: "import-design"', ui)
         self.assertIn('type: "begin-page-image-import"', ui)
         self.assertIn('api("/api/capture-jobs"', ui)
         self.assertIn('method: "DELETE"', ui)
@@ -40,23 +49,6 @@ class FigmaPluginContractTests(unittest.TestCase):
         self.assertIn('message.type === "append-page-image"', renderer)
         self.assertIn("captured-page-full-resolution", renderer)
         self.assertIn("canva-importer.orientation", renderer)
-
-    def test_renderer_covers_every_ir_node_type(self):
-        renderer = (PLUGIN / "code.js").read_text(encoding="utf-8")
-        for node_type in ("group", "text", "image", "rectangle", "ellipse", "vector", "raster-fallback"):
-            self.assertIn(f'irNode.type === "{node_type}"', renderer)
-        self.assertIn("canva-importer.canva-id", renderer)
-        self.assertIn("QA Reference · hidden", renderer)
-
-    def test_editable_import_exports_and_submits_final_figma_qa(self):
-        ui = (PLUGIN / "ui.html").read_text(encoding="utf-8")
-        renderer = (PLUGIN / "code.js").read_text(encoding="utf-8")
-        self.assertIn("frame.exportAsync", renderer)
-        self.assertIn('type: "figma-qa-export"', renderer)
-        self.assertIn('message.type === "figma-qa-export"', ui)
-        self.assertIn("/figma-qa", ui)
-        self.assertIn("QA job ID:", ui)
-
 
 if __name__ == "__main__":
     unittest.main()
