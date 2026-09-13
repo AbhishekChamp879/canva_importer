@@ -16,6 +16,7 @@ from .models import CaptureRequest, validate_uuid
 from .services import ServiceContainer
 from .acquisition.url_policy import is_valid_canva_url
 from .acquisition.oauth import oauth_design_url
+from .editable_models import EditableRequest
 
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ def health():
             "overrideConfigured": bool(config.browser_executable_path),
         },
         "canvaOAuth": services().canva_oauth.status(),
+        "editableImport": {"enabled": True, "fontAIConfigured": services().editable_jobs.ai.configured},
         "limits": {
             "captureConcurrency": config.capture_concurrency,
             "captureTimeoutMs": config.capture_timeout_ms,
@@ -138,6 +140,8 @@ def create_canva_oauth_capture_job():
     if request.method == "OPTIONS":
         return "", 204
     payload = request.get_json(silent=False) or {}
+    if not isinstance(payload, dict):
+        return error_response("INVALID_REQUEST", "Request body must be a JSON object.", 400)
     design_id = payload.get("designId")
     if not isinstance(design_id, str):
         return error_response("INVALID_CANVA_DESIGN", "Select a Canva design first.", 400)
@@ -256,6 +260,49 @@ def page_thumbnail(image_base64: str, maximum_size: int = 320) -> str:
         buffer = io.BytesIO()
         thumbnail.save(buffer, format="JPEG", quality=82, optimize=True)
     return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+
+
+@api.route("/api/editable-jobs", methods=["POST", "OPTIONS"])
+def create_editable_job():
+    if request.method == "OPTIONS":
+        return "", 204
+    payload = EditableRequest.model_validate(request.get_json())
+    job = services().editable_jobs.submit(payload.captureId, payload.pageId)
+    return jsonify({"jobId": job["jobId"]}), 202
+
+
+@api.route("/api/editable-jobs/<job_id>", methods=["GET", "DELETE", "OPTIONS"])
+def editable_job(job_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    runner = services().editable_jobs
+    return bounded_json(runner.cancel(job_id) if request.method == "DELETE" else runner.get(job_id))
+
+
+@api.route("/api/editable-jobs/<job_id>/scene", methods=["GET", "OPTIONS"])
+def editable_scene(job_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    return bounded_json(services().editable_jobs.scene(job_id).json_dict())
+
+
+@api.route("/api/editable-jobs/<job_id>/assets/<asset_id>", methods=["GET", "OPTIONS"])
+def editable_asset(job_id, asset_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    response = send_file(io.BytesIO(services().editable_jobs.asset(job_id, asset_id)), mimetype="image/png")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@api.route("/api/editable-jobs/<job_id>/font-suggestions", methods=["POST", "OPTIONS"])
+def font_suggestions(job_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    payload = request.get_json()
+    if not isinstance(payload, dict) or set(payload) != {"fontId"} or not isinstance(payload["fontId"], str):
+        raise ServiceError("INVALID_REQUEST", "Provide one fontId from this conversion.", 400)
+    return bounded_json(services().editable_jobs.suggest(job_id, payload["fontId"]))
 
 
 @api.app_errorhandler(ServiceError)

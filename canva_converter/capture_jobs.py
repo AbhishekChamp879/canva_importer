@@ -32,7 +32,12 @@ class CaptureJobRunner:
                 raise AcquisitionError("CAPTURE_BUSY", f"Capture capacity is busy ({self.max_workers} active). Retry shortly.")
             signal = Event()
             self._signals[job.id] = signal
-        self.executor.submit(self._run, job.id, signal)
+        try:
+            self.executor.submit(self._run, job.id, signal)
+        except Exception:
+            with self._lock:
+                self._signals.pop(job.id, None)
+            raise
 
     def cancel(self, job_id: str) -> CaptureJob | None:
         with self._lock:
@@ -48,13 +53,13 @@ class CaptureJobRunner:
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _run(self, job_id: str, signal: Event) -> None:
-        job = self.store.get_capture_job(job_id)
-        if not job:
-            return
-        if signal.is_set() or job.cancelled:
-            self.store.cancel_capture_job(job_id)
-            return
         try:
+            job = self.store.get_capture_job(job_id)
+            if not job:
+                return
+            if signal.is_set() or job.cancelled:
+                self.store.cancel_capture_job(job_id)
+                return
             self.store.update_capture_job(job_id, status="capturing", progress=1, message="Starting capture")
 
             def progress(message: str) -> None:

@@ -63,6 +63,8 @@ class Settings:
     canva_client_id: str | None = None
     canva_client_secret: str | None = None
     canva_redirect_uri: str | None = None
+    openai_api_key: str | None = None
+    font_ai_model: str = "gpt-4.1-mini"
 
     @classmethod
     def load(cls) -> "Settings":
@@ -104,4 +106,6 @@ class Settings:
             canva_client_id=canva_client_id,
             canva_client_secret=canva_client_secret,
             canva_redirect_uri=canva_redirect_uri,
+            openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
+            font_ai_model=os.environ.get("FONT_AI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
         )

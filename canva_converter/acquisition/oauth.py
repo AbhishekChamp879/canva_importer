@@ -139,6 +139,16 @@ class CanvaOAuthManager:
             # intentionally non-fatal and the rotating refresh token is not kept.
             pass
 
+    def refresh_after_rejection(self, rejected_token: str) -> str:
+        """Refresh once without reusing a refresh token rotated by another request."""
+        with self._lock:
+            tokens = self._tokens
+            if not tokens:
+                raise ServiceError("CANVA_NOT_CONNECTED", "Reconnect Canva before exporting.", 401)
+            if tokens.access_token == rejected_token:
+                self._store_tokens(self._token_request({"grant_type": "refresh_token", "refresh_token": tokens.refresh_token}))
+            return self._tokens.access_token
+
     def _store_tokens(self, payload: dict[str, Any]) -> None:
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
@@ -224,10 +234,18 @@ class CanvaConnectClient:
         return pages
 
     def export_pngs(self, design_id: str, *, is_cancelled: Callable[[], bool], progress: Callable[[str], None]) -> list[str]:
+        return self._export(design_id, {"type": "png", "lossless": True, "as_single_image": False}, is_cancelled, progress)
+
+    def export_pdf(self, design_id: str, page_index: int, *, is_cancelled, progress) -> list[str]:
+        if type(page_index) is not int or not 0 <= page_index < MAX_PAGES:
+            raise ServiceError("INVALID_PAGE", "Select a valid Canva page.", 400)
+        return self._export(design_id, {"type": "pdf", "pages": [page_index + 1], "export_quality": "regular"}, is_cancelled, progress)
+
+    def _export(self, design_id, export_format, is_cancelled, progress):
         _validate_design_id(design_id)
         created = self._json("POST", "/rest/v1/exports", {
             "design_id": design_id,
-            "format": {"type": "png", "lossless": True, "as_single_image": False},
+            "format": export_format,
         })
         job = created.get("job")
         if not isinstance(job, dict) or not isinstance(job.get("id"), str):
@@ -237,7 +255,7 @@ class CanvaConnectClient:
         while time.monotonic() < deadline:
             if is_cancelled():
                 raise AcquisitionError("CAPTURE_CANCELLED", "Capture cancelled.")
-            status_payload = self._json("GET", f"/rest/v1/exports/{quote(job_id, safe='')}")
+            status_payload = self._read_with_retry(f"/rest/v1/exports/{quote(job_id, safe='')}", is_cancelled, deadline)
             current = status_payload.get("job")
             if not isinstance(current, dict):
                 raise ServiceError("CANVA_EXPORT_INVALID_RESPONSE", "Canva returned invalid export status.", 502)
@@ -254,14 +272,35 @@ class CanvaConnectClient:
             if status != "in_progress":
                 raise ServiceError("CANVA_EXPORT_INVALID_RESPONSE", "Canva returned an unknown export status.", 502)
             progress("[exporting] Canva is preparing the official page export.")
-            time.sleep(1)
+            for _ in range(10):
+                if is_cancelled():
+                    raise AcquisitionError("CAPTURE_CANCELLED", "Export cancelled.")
+                time.sleep(0.1)
         raise ServiceError("CANVA_EXPORT_TIMEOUT", "Canva did not finish the export within three minutes.", 504)
 
-    def download_export(self, url: str) -> bytes:
+    def _read_with_retry(self, path, is_cancelled, deadline):
+        for attempt in range(3):
+            if is_cancelled() or time.monotonic() >= deadline:
+                raise ServiceError("CANVA_EXPORT_TIMEOUT", "Export stopped or exceeded its deadline.", 504)
+            try:
+                return self._json("GET", path)
+            except ServiceError as error:
+                if attempt == 2 or error.status not in {429, 502, 503, 504}:
+                    raise
+                delay = min(30, getattr(error, "retry_after", 2 ** attempt))
+                end = min(deadline, time.monotonic() + delay)
+                while time.monotonic() < end and not is_cancelled():
+                    time.sleep(0.1)
+
+    def download_export(self, url: str, *, kind="png", is_cancelled=lambda: False) -> bytes:
+        mime = "application/pdf" if kind == "pdf" else "image/png"
+        limit = 50 * 1024 * 1024 if kind == "pdf" else MAX_PAGE_IMAGE_BYTES
         current = _validated_export_url(url)
         opener = build_opener(_NoRedirect())
         for _ in range(6):
-            request = Request(current, headers={"Accept": "image/png", "User-Agent": "Canva-Figma-Importer/1.0"})
+            if is_cancelled():
+                raise AcquisitionError("CAPTURE_CANCELLED", "Export download cancelled.")
+            request = Request(current, headers={"Accept": mime, "User-Agent": "Canva-Figma-Importer/1.0"})
             try:
                 response = opener.open(request, timeout=45)
             except HTTPError as error:
@@ -276,8 +315,8 @@ class CanvaConnectClient:
                 raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "The Canva export could not be downloaded.", 502) from error
             with response:
                 content_type = response.headers.get_content_type()
-                if content_type not in {"image/png", "application/octet-stream"}:
-                    raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export did not return a PNG image.", 502)
+                if content_type not in {mime, "application/octet-stream"}:
+                    raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export returned an unexpected file type.", 502)
                 if response.headers.get("Content-Encoding", "identity").casefold() not in {"", "identity"}:
                     raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export used an unsupported content encoding.", 502)
                 length = response.headers.get("Content-Length")
@@ -286,11 +325,24 @@ class CanvaConnectClient:
                         declared_length = int(length)
                     except ValueError as error:
                         raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export returned an invalid Content-Length.", 502) from error
-                    if declared_length < 0 or declared_length > MAX_PAGE_IMAGE_BYTES:
-                        raise ServiceError("CAPTURE_LIMIT_EXCEEDED", "A Canva export page exceeds the 25MB image limit.", 413)
-                data = response.read(MAX_PAGE_IMAGE_BYTES + 1)
-                if not data or len(data) > MAX_PAGE_IMAGE_BYTES:
-                    raise ServiceError("CAPTURE_LIMIT_EXCEEDED", "A Canva export page is empty or exceeds the 25MB image limit.", 413)
+                    if declared_length < 0 or declared_length > limit:
+                        raise ServiceError("CAPTURE_LIMIT_EXCEEDED", "Canva export exceeds the download limit.", 413)
+                chunks, count = [], 0
+                while True:
+                    if is_cancelled():
+                        raise AcquisitionError("CAPTURE_CANCELLED", "Export download cancelled.")
+                    chunk = response.read(min(65536, limit + 1 - count))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    count += len(chunk)
+                    if count > limit:
+                        raise ServiceError("CAPTURE_LIMIT_EXCEEDED", "Canva export exceeds the download limit.", 413)
+                data = b"".join(chunks)
+                if not data or (length and len(data) != int(length)):
+                    raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export was empty or truncated.", 502)
+                if kind == "pdf" and not data.startswith(b"%PDF-"):
+                    raise ServiceError("INVALID_PDF", "Canva did not return a PDF document.", 422)
                 return data
         raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva export exceeded the redirect limit.", 502)
 
@@ -298,15 +350,25 @@ class CanvaConnectClient:
         if not path.startswith("/rest/v1/"):
             raise ValueError("Canva API path is outside the allowed API prefix.")
         data = json.dumps(body).encode("utf-8") if body is not None else None
+        token = self.auth.access_token()
         request = Request(
             f"{CANVA_API_ORIGIN}{path}", data=data, method=method,
             headers={
-                "Authorization": f"Bearer {self.auth.access_token()}",
+                "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        return _read_json_response(request, timeout=45)
+        try:
+            return _read_json_response(request, timeout=45)
+        except ServiceError as error:
+            if error.status != 401:
+                raise
+            # A definite 401 means the operation was rejected before authorization;
+            # unlike a network timeout, it is safe to retry after one refresh.
+            refreshed = self.auth.refresh_after_rejection(token)
+            request.add_header("Authorization", f"Bearer {refreshed}")
+            return _read_json_response(request, timeout=45)
 
     @staticmethod
     def _public_design(item: Any) -> dict[str, Any]:
@@ -395,10 +457,11 @@ def _validate_design_id(value: str) -> str:
 def _validated_export_url(value: str) -> str:
     try:
         parsed = urlparse(value)
+        port = parsed.port
     except ValueError as error:
         raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva returned an invalid export URL.", 502) from error
     host = (parsed.hostname or "").casefold()
-    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port is not None or not (host == "canva.com" or host.endswith(".canva.com")):
+    if parsed.scheme != "https" or parsed.username or parsed.password or port is not None or not (host == "canva.com" or host.endswith(".canva.com")):
         raise ServiceError("CANVA_EXPORT_DOWNLOAD_FAILED", "Canva returned an untrusted export URL.", 502)
     return value
 
@@ -445,9 +508,14 @@ def _read_json_response(request: Request, *, timeout: int) -> dict[str, Any]:
             message = detail.get("message") if isinstance(detail, dict) else None
         except Exception:
             message = None
-        status = 401 if error.code == 401 else 403 if error.code == 403 else 429 if error.code == 429 else 502
-        code = "CANVA_NOT_CONNECTED" if error.code == 401 else "CANVA_PERMISSION_DENIED" if error.code == 403 else "CANVA_RATE_LIMITED" if error.code == 429 else "CANVA_API_FAILED"
-        raise ServiceError(code, public_error_message(message or f"Canva API returned HTTP {error.code}."), status) from error
+        status = error.code if error.code in {401, 403, 404, 429} else 502
+        code = {401: "CANVA_NOT_CONNECTED", 403: "CANVA_PERMISSION_DENIED", 404: "CANVA_DESIGN_NOT_FOUND", 429: "CANVA_RATE_LIMITED"}.get(error.code, "CANVA_API_FAILED")
+        mapped = ServiceError(code, public_error_message(message or f"Canva API returned HTTP {error.code}."), status)
+        try:
+            mapped.retry_after = max(0, min(30, float(error.headers.get("Retry-After", "1"))))
+        except (ValueError, TypeError):
+            mapped.retry_after = 1
+        raise mapped from error
     except URLError as error:
         raise ServiceError("CANVA_API_UNAVAILABLE", "The Canva API could not be reached.", 502) from error
     try:

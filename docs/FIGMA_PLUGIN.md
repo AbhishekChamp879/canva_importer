@@ -1,5 +1,7 @@
 # Figma page importer
 
+Editable import adds a separate session protocol (`editable-begin`, scene chunks, asset chunks, render, font-preview, commit and cancel). It creates a temporary native frame and displays a Figma-rendered preview before final insertion. See EDITABLE_IMPORT.md for the user flow and supported content. Existing image-import messages remain supported.
+
 Import `figma-plugin/manifest.json` through Figma Desktop's development plugin menu. The plugin is named **Canva to Figma Pages**.
 
 ## User flow
