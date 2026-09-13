@@ -96,6 +96,11 @@ async function main() {
   assert.equal(scripts.length, 1);
   vm.runInContext(scripts[0][1], context);
   assert.equal(elements.reconstruct, undefined);
+  await vm.runInContext("refreshCanvaOAuthStatus()", context);
+  assert.equal(elements["canva-connect"].disabled, false, "missing setup must remain retryable after backend restart");
+  assert.equal(elements["canva-connect"].textContent, "Retry Canva setup");
+  await vm.runInContext("connectCanva()", context);
+  assert.ok(!requests.some(request => request.route.endsWith("/oauth/start")), "missing settings must not start OAuth");
 
   elements["canva-url"].value = "https://www.canva.com/design/ABC/token/view";
   await vm.runInContext("capturePreview()", context);

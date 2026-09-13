@@ -1,5 +1,18 @@
 # HTTP API
 
+## Editable PDF jobs
+
+- `POST /api/editable-jobs` with `{ "captureId": "<uuid>", "pageId": "<uuid>" }` returns HTTP 202 and `{ "jobId": "<uuid>" }`. Requires a live capture page and connected Canva account.
+- `GET /api/editable-jobs/<id>` returns status (`queued`, `exporting`, `extracting`, `completed`, `failed`, `cancelled`), progress, message, page identity, expiry, and font-AI availability.
+- `DELETE /api/editable-jobs/<id>` cancels an active conversion. Terminal jobs retain their status.
+- `GET /api/editable-jobs/<id>/scene` returns the validated version-1 scene after completion; otherwise HTTP 409. Expired/unknown IDs return 404.
+- `GET /api/editable-jobs/<id>/assets/<assetId>` returns only a PNG asset belonging to that scene, with no-store caching.
+- `POST /api/editable-jobs/<id>/font-suggestions` with `{ "fontId": "font-0" }` returns up to three `{family, style, reason}` candidates. This explicit action may call a paid cloud API. Missing configuration, busy/quota state and provider failures leave conversion results intact.
+
+The scene describes page dimensions, ordered nodes, fonts, local assets, reference image and fallback warnings. It contains no external asset URLs or executable code. See EDITABLE_IMPORT.md for limits and supported content.
+
+## Existing capture API
+
 Base URL: `http://localhost:3000`. Errors use `{"error":{"code":"CODE","message":"Description"}}`. Requests with JSON bodies must use `Content-Type: application/json`. Request bodies are limited to 2 MiB.
 
 | Method | Path | Behavior |

@@ -28,7 +28,7 @@
     .panel { padding: 14px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
     .label-row, .button-row, .preview-head, .progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     label.title { display: block; margin-bottom: 7px; font-weight: 600; }
-    input[type="url"], input[type="search"], select { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); outline: none; }
+    input[type="url"], input[type="search"], input[type="text"], select { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); outline: none; }
     input[type="url"]:focus { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
     .input-action { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
     button { min-height: 32px; border: 1px solid var(--border); border-radius: 6px; padding: 0 12px; color: var(--text); background: var(--bg); cursor: pointer; }
@@ -62,7 +62,7 @@
   <div class="app">
     <header>
       <h1>Canva → Figma</h1>
-      <p>Import Canva pages as images in Figma</p>
+      <p>Import Canva pages as images or editable layers</p>
     </header>
 
     <main>
@@ -107,8 +107,29 @@
         </div>
         <div class="import-actions">
           <button id="import-images" class="primary" type="button">Import page images</button>
+          <button id="import-editable" type="button" disabled>Import editable page</button>
         </div>
         <p class="hint" style="margin-top:8px">Each selected page becomes an image inside its own Figma frame.</p>
+        <p id="editable-hint" class="hint">For editable import, select exactly one page and connect Canva.</p>
+      </section>
+
+      <section id="editable-review" class="panel hidden">
+        <strong>Review selected page</strong>
+        <p class="hint">The PDF is a fresh export. Check that this is the page you want. Unsupported content keeps its original appearance as an image.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div><p class="hint">Fresh Canva PDF</p><img id="pdf-reference" alt="Fresh PDF reference" style="width:100%;background:#fff"></div>
+          <div><p class="hint">Actual Figma result</p><img id="figma-result" alt="Figma candidate preview" style="width:100%;background:#fff"></div>
+        </div>
+        <p id="editable-counts" class="hint"></p>
+        <ul id="editable-warnings" class="summary"></ul>
+        <div id="editable-fonts"></div>
+        <datalist id="available-fonts"></datalist>
+        <div class="button-row" style="flex-wrap:wrap;gap:8px;margin-top:12px">
+          <button id="editable-refresh" type="button">Update font preview</button>
+          <button id="editable-commit" class="primary" type="button" disabled>Import editable result</button>
+          <button id="editable-image" type="button">Import as image</button>
+          <button id="editable-discard" type="button">Cancel</button>
+        </div>
       </section>
 
       <section id="job-panel" class="panel hidden">
@@ -148,6 +169,8 @@
       "preview-panel", "design-title", "page-count", "pages", "toggle-pages", "selected-count", "import-images",
       "job-panel", "job-status", "job-percent", "progress-bar", "job-message",
       "cancel-job", "activity", "activity-state", "summary", "close"
+      , "import-editable", "editable-hint", "editable-review", "pdf-reference", "figma-result", "editable-counts",
+      "editable-warnings", "editable-fonts", "available-fonts", "editable-refresh", "editable-commit", "editable-image", "editable-discard"
     ].map(id => [id, document.getElementById(id)]));
 
     let capture = null;
@@ -157,12 +180,16 @@
     let capturePollTimer = null;
     let oauthPollTimer = null;
     let oauthPollDeadline = 0;
+    let lastCanvaStatus = null;
+    let activeEditable = null;
+    let editableSequence = 0;
+    const editableWaiters = new Map();
 
     const BACKEND_BASE = "http://localhost:3000";
 
-    async function api(path, options) {
+    async function api(path, options, timeoutMs = 30000) {
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 30000);
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(`${BACKEND_BASE}${path}`, {
           ...options,
@@ -208,29 +235,44 @@
     async function refreshCanvaOAuthStatus(options = {}) {
       try {
         const status = await api("/api/canva/oauth/status");
+        lastCanvaStatus = status;
         elements["canva-oauth-dot"].classList.toggle("connected", Boolean(status.connected));
         elements["canva-design-controls"].classList.toggle("hidden", !status.connected);
-        elements["canva-connect"].textContent = status.connected ? "Disconnect" : "Connect Canva";
-        elements["canva-connect"].disabled = !status.configured;
+        elements["canva-connect"].textContent = status.connected ? "Disconnect" : status.configured ? "Connect Canva" : "Retry Canva setup";
+        elements["canva-connect"].disabled = false;
         elements["canva-oauth-status"].textContent = !status.configured
-          ? "OAuth not configured in the converter"
+          ? "Canva settings are missing in the running backend. Check .env, restart the backend, then retry."
           : status.connected ? "Connected through Canva OAuth" : "Not connected";
         if (status.connected && options.loadDesigns) await loadCanvaDesigns();
         return status;
       } catch (error) {
-        elements["canva-oauth-status"].textContent = "Converter unavailable";
-        elements["canva-connect"].disabled = true;
-        return { configured: false, connected: false };
+        elements["canva-oauth-status"].textContent = "Backend unavailable. Start run.py and retry.";
+        elements["canva-connect"].textContent = "Retry connection";
+        elements["canva-connect"].disabled = false;
+        lastCanvaStatus = { configured: false, connected: false, unavailable: true };
+        return lastCanvaStatus;
       }
     }
 
     async function connectCanva() {
+      const disconnectRequested = Boolean(lastCanvaStatus && lastCanvaStatus.connected);
       const status = await refreshCanvaOAuthStatus();
       if (status.connected) {
-        await api("/api/canva/oauth/disconnect", { method: "DELETE" });
+        if (!disconnectRequested) {
+          await loadCanvaDesigns();
+          setActivity("Canva is connected. Your page selection is preserved.", "Canva connected");
+          return;
+        }
+        try { await api("/api/canva/oauth/disconnect", { method: "DELETE" }); }
+        catch (error) { setActivity(error.message, "Disconnection failed", true); return; }
         elements["canva-design-select"].replaceChildren(new Option("Choose a Canva design", ""));
         await refreshCanvaOAuthStatus();
         setActivity("Canva account disconnected. Public-link import remains available.", "Disconnected");
+        return;
+      }
+      if (!status.configured) {
+        setActivity(status.unavailable ? "Start the backend with .venv/Scripts/python.exe run.py, then retry connection."
+          : "Set CANVA_CLIENT_ID and CANVA_CLIENT_SECRET in the project's .env, restart run.py, then click Retry Canva setup. Existing page images remain usable.", "Canva setup required", true);
         return;
       }
       try {
@@ -313,9 +355,12 @@
     function updateSelection() {
       const boxes = [...elements.pages.querySelectorAll('input[type="checkbox"]')];
       const selected = boxes.filter(box => box.checked).length;
-      const busy = Boolean(activeCaptureJobId || activeImageImport);
+      const busy = Boolean(activeCaptureJobId || activeImageImport || activeEditable);
       elements["selected-count"].textContent = `${selected} of ${boxes.length} selected`;
       elements["import-images"].disabled = selected === 0 || busy;
+      elements["import-editable"].disabled = selected !== 1 || busy;
+      elements["editable-hint"].textContent = selected === 1 ? "Editable import uses a fresh PDF export and requires Connect Canva." : "Select exactly one page for editable import.";
+      boxes.forEach(box => { box.disabled = busy; });
       elements["toggle-pages"].disabled = busy;
       elements["toggle-pages"].textContent = selected === boxes.length ? "Clear all" : "Select all";
     }
@@ -523,6 +568,7 @@
     }
 
     async function cancelJob() {
+      if (activeEditable) { await discardEditable(); return; }
       if (activeImageImport) {
         activeImageImport.cancelled = true;
         activeImageImport.controller.abort();
@@ -566,6 +612,213 @@
       elements.summary.classList.remove("hidden");
     }
 
+    function editableCall(session, type, fields = {}, timeout = 60000) {
+      const requestId = `editable-request-${++editableSequence}`;
+      return new Promise((resolve, reject) => {
+        const timer = window.setTimeout(() => { editableWaiters.delete(requestId); reject(new Error("Figma did not acknowledge the editable operation. Retry conversion.")); }, timeout);
+        editableWaiters.set(requestId, { sessionId: session.id, resolve, reject, timer });
+        parent.postMessage({ pluginMessage: { type, sessionId: session.id, requestId, ...fields } }, "*");
+      });
+    }
+
+    function checkEditableUI(session) {
+      if (session.cancelled || activeEditable !== session) throw new DOMException("Editable import cancelled.", "AbortError");
+    }
+
+    function editableImage(session, element, bytes) {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
+      session.urls.push(url); element.src = url;
+    }
+
+    async function editableAsset(session, assetId) {
+      if (!/^[a-z0-9-]+$/.test(assetId)) throw new Error("Invalid PDF asset reference.");
+      const timer = window.setTimeout(() => session.controller.abort(), 45000);
+      try {
+        const response = await fetch(`${BACKEND_BASE}/api/editable-jobs/${session.jobId}/assets/${assetId}`, { signal: session.controller.signal });
+        if (!response.ok) throw new Error("PDF asset expired or could not be downloaded. Convert the page again.");
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (!bytes.length || bytes.length > 25 * 1024 * 1024) throw new Error("PDF asset exceeds the image limit.");
+        checkEditableUI(session); return bytes;
+      } finally { window.clearTimeout(timer); }
+    }
+
+    function setEditableReviewBusy(session, busy) {
+      session.busy = busy;
+      for (const id of ["editable-refresh", "editable-commit", "editable-image"]) elements[id].disabled = busy;
+      for (const control of session.fontControls || []) control.disabled = busy;
+      elements["editable-commit"].disabled = busy || session.dirty || !session.report || (session.report.text + session.report.vectors === 0);
+    }
+
+    function releaseEditable(session) {
+      for (const url of session.urls) URL.revokeObjectURL(url);
+      for (const [id, waiter] of editableWaiters) if (waiter.sessionId === session.id) {
+        window.clearTimeout(waiter.timer); waiter.reject(new DOMException("Cancelled", "AbortError")); editableWaiters.delete(id);
+      }
+      elements["editable-review"].classList.add("hidden");
+      if (activeEditable === session) activeEditable = null;
+      setCaptureBusy(false); updateSelection(); elements["cancel-job"].disabled = true;
+    }
+
+    async function discardEditable() {
+      const session = activeEditable;
+      if (!session) return;
+      session.cancelled = true; session.controller.abort();
+      parent.postMessage({ pluginMessage: { type: "editable-cancel", sessionId: session.id } }, "*");
+      releaseEditable(session);
+      if (session.jobId) {
+        try { await api(`/api/editable-jobs/${session.jobId}`, { method: "DELETE" }); }
+        catch (_) { setActivity("Preview removed. Backend cancellation could not be confirmed; its deadline still applies.", "Cancelled"); return; }
+      }
+      setActivity("Editable import cancelled; temporary Figma result removed.", "Cancelled");
+    }
+
+    async function failEditable(session, error) {
+      if (activeEditable !== session) return;
+      await discardEditable();
+      setActivity(error.message, "Editable import failed", true);
+    }
+
+    async function startEditable() {
+      const pages = selectedPages();
+      if (!capture || pages.length !== 1 || activeEditable) return;
+      const session = { id: `editable-${Date.now()}-${++editableSequence}`, jobId: null, urls: [], controller: new AbortController(), cancelled: false,
+        replacements: {}, fontControls: [], dirty: false, busy: true };
+      activeEditable = session; setCaptureBusy(true); updateSelection();
+      elements["job-panel"].classList.remove("hidden"); elements["cancel-job"].disabled = false;
+      try {
+        const auth = await api("/api/canva/oauth/status"); checkEditableUI(session);
+        if (!auth.connected) throw new Error("Connect Canva, then click Import editable page again. Your page selection is preserved.");
+        const created = await api("/api/editable-jobs", { method: "POST", body: JSON.stringify({ captureId: capture.captureId, pageId: pages[0].id }) });
+        session.jobId = created.jobId;
+        if (session.cancelled || activeEditable !== session) { await api(`/api/editable-jobs/${session.jobId}`, { method: "DELETE" }); return; }
+        let job;
+        const deadline = Date.now() + 330000;
+        do {
+          if (Date.now() > deadline) throw new Error("Conversion exceeded its deadline. Retry or import as image.");
+          job = await api(`/api/editable-jobs/${session.jobId}`); checkEditableUI(session); updateJob(job);
+          if (["failed", "cancelled"].includes(job.status)) throw new Error(job.message || "PDF conversion failed.");
+          if (job.status !== "completed") await new Promise(resolve => window.setTimeout(resolve, 700));
+          checkEditableUI(session);
+        } while (job.status !== "completed");
+        session.scene = await api(`/api/editable-jobs/${session.jobId}/scene`); checkEditableUI(session);
+        session.job = job;
+        const ready = await editableCall(session, "editable-begin", { title: job.title, jobId: session.jobId, pageIndex: job.pageIndex });
+        checkEditableUI(session); session.fonts = ready.fonts;
+        const sceneText = JSON.stringify(session.scene);
+        for (let offset = 0; offset < sceneText.length; offset += 131072) {
+          await editableCall(session, "editable-scene-chunk", { offset, total: sceneText.length, chunk: sceneText.slice(offset, offset + 131072) });
+          checkEditableUI(session);
+        }
+        session.assetBytes = new Map();
+        for (const [index, asset] of session.scene.assets.entries()) {
+          checkEditableUI(session);
+          updateJob({ status: "preparing preview", progress: Math.round(index / session.scene.assets.length * 90), message: `Transferring PDF asset ${index + 1} of ${session.scene.assets.length}` });
+          const bytes = await editableAsset(session, asset.id);
+          if (asset.id === session.scene.referenceAsset || session.scene.fonts.some(f => f.cropAsset === asset.id)) session.assetBytes.set(asset.id, bytes);
+          for (let offset = 0; offset < bytes.length; offset += 512 * 1024) {
+            await editableCall(session, "editable-asset", { assetId: asset.id, offset, total: bytes.length, bytes: bytes.slice(offset, offset + 512 * 1024) });
+            checkEditableUI(session);
+          }
+        }
+        editableImage(session, elements["pdf-reference"], session.assetBytes.get(session.scene.referenceAsset));
+        await refreshEditablePreview(session);
+        checkEditableUI(session); renderFontControls(session);
+        elements["editable-review"].classList.remove("hidden");
+        updateJob({ status: "review", progress: 100, message: `Review fresh Canva page ${job.pageIndex + 1} before importing.` });
+        setActivity("Review the PDF reference, actual Figma preview, and any font or image fallbacks.", "Review ready");
+      } catch (error) { await failEditable(session, error); }
+    }
+
+    async function refreshEditablePreview(session = activeEditable, imageOnly = false) {
+      if (!session) return;
+      setEditableReviewBusy(session, true);
+      try {
+        const result = await editableCall(session, "editable-render", { replacements: session.replacements, imageOnly }, 120000);
+        checkEditableUI(session); session.report = result.report; session.dirty = false;
+        editableImage(session, elements["figma-result"], result.preview);
+        const r = result.report;
+        elements["editable-counts"].textContent = `${r.text} editable text · ${r.vectors} vectors · ${r.images} images · ${r.fallbacks} fallbacks`;
+        elements["editable-warnings"].replaceChildren();
+        for (const warning of [...new Set(r.warnings)]) {
+          const li = document.createElement("li"); li.textContent = warning; elements["editable-warnings"].append(li);
+        }
+      } finally { if (activeEditable === session) setEditableReviewBusy(session, false); }
+    }
+
+    function renderFontControls(session) {
+      elements["editable-fonts"].replaceChildren(); elements["available-fonts"].replaceChildren();
+      for (const font of session.fonts) elements["available-fonts"].append(new Option(`${font.family} / ${font.style}`, `${font.family} / ${font.style}`));
+      for (const font of session.scene.fonts) {
+        const row = document.createElement("div"); row.style.marginTop = "16px";
+        const label = document.createElement("strong"); label.textContent = `${font.originalName} (${font.style})`;
+        const preview = document.createElement("img"); preview.style.maxWidth = "100%"; preview.style.maxHeight = "100px"; preview.style.background = "white"; preview.alt = "Original text crop";
+        editableImage(session, preview, session.assetBytes.get(font.cropAsset));
+        const input = document.createElement("input"); input.type = "text"; input.setAttribute("list", "available-fonts");
+        input.placeholder = "Choose replacement: family / style"; input.style.width = "100%";
+        input.setAttribute("aria-label", `Replacement for ${font.originalName}`);
+        const state = document.createElement("p"); state.className = "hint";
+        const matched = session.report.fonts.find(f => f.id === font.id);
+        state.textContent = matched && matched.matched ? `Available: ${matched.matched.family} ${matched.matched.style}` : "Original appearance retained. You can choose an available replacement.";
+        input.addEventListener("change", () => {
+          const found = session.fonts.find(f => `${f.family} / ${f.style}` === input.value);
+          if (input.value && !found) { state.textContent = "Select a font available in Figma from the list."; input.value = ""; return; }
+          if (found) session.replacements[font.id] = found; else delete session.replacements[font.id];
+          session.dirty = true; elements["editable-commit"].disabled = true;
+          state.textContent = "Update font preview to see this change.";
+        });
+        const appearance = document.createElement("button"); appearance.textContent = "Keep original appearance";
+        appearance.addEventListener("click", () => { session.replacements[font.id] = "appearance"; input.value = ""; session.dirty = true; elements["editable-commit"].disabled = true; state.textContent = "Update font preview to apply original appearance."; });
+        const ai = document.createElement("button"); ai.textContent = "Suggest matching fonts"; ai.disabled = !session.job.fontAIConfigured;
+        const notice = document.createElement("p"); notice.className = "hint";
+        notice.textContent = session.job.fontAIConfigured ? "Suggestions send this text crop to OpenAI and may incur API charges. Suggestions are approximate." : "Optional AI suggestions require OPENAI_API_KEY in the backend. Import works without AI.";
+        const candidates = document.createElement("div");
+        ai.addEventListener("click", async () => {
+          if (session.busy) return;
+          setEditableReviewBusy(session, true); ai.disabled = true;
+          try {
+            state.textContent = "Requesting optional font suggestions…";
+            const suggestions = await api(`/api/editable-jobs/${session.jobId}/font-suggestions`, { method: "POST", body: JSON.stringify({ fontId: font.id }) }, 60000);
+            checkEditableUI(session);
+            const rendered = await editableCall(session, "editable-font-preview", { fontId: font.id, candidates: suggestions.candidates });
+            checkEditableUI(session); candidates.replaceChildren();
+            for (const candidate of rendered.candidates) {
+              const card = document.createElement("div");
+              const description = document.createElement("p"); description.className = "hint";
+              description.textContent = `${candidate.family} ${candidate.style}: ${candidate.reason}${candidate.available ? "" : " — unavailable in Figma"}`;
+              card.append(description);
+              if (candidate.preview) { const img = document.createElement("img"); img.style.maxWidth = "100%"; img.style.background = "white"; img.alt = "Candidate rendered in Figma"; editableImage(session, img, candidate.preview); card.append(img); }
+              const use = document.createElement("button"); use.textContent = "Use this suggestion"; use.disabled = !candidate.available || !font.sample;
+              use.addEventListener("click", () => { if (session.busy) return; session.replacements[font.id] = candidate.font; input.value = `${candidate.font.family} / ${candidate.font.style}`; session.dirty = true; elements["editable-commit"].disabled = true; state.textContent = "Update font preview before importing."; });
+              card.append(use); candidates.append(card);
+            }
+            state.textContent = rendered.candidates.length ? "Compare the rendered suggestions; no replacement has been applied." : "No plausible font match found. Keep original appearance or choose a font manually.";
+          } catch (error) { if (activeEditable === session) state.textContent = error.message; }
+          finally { if (activeEditable === session) { setEditableReviewBusy(session, false); ai.disabled = !session.job.fontAIConfigured; } }
+        });
+        session.fontControls.push(input, appearance);
+        row.append(label, preview, state, input, appearance, notice, ai, candidates); elements["editable-fonts"].append(row);
+      }
+    }
+
+    async function commitEditable(imageOnly = false) {
+      const session = activeEditable;
+      if (!session || session.busy || (!imageOnly && session.dirty)) return;
+      try {
+        if (imageOnly) await refreshEditablePreview(session, true);
+        setEditableReviewBusy(session, true);
+        const result = await editableCall(session, "editable-commit"); checkEditableUI(session);
+        const r = result.report;
+        releaseEditable(session);
+        setActivity(`Imported one page: ${r.text} editable text, ${r.vectors} vectors, ${r.images} images; ${r.fallbacks} fallbacks.`, "Completed");
+        updateJob({ status: "completed", progress: 100, message: "Figma import complete" });
+      } catch (error) { await failEditable(session, error); }
+    }
+
+    elements["import-editable"].addEventListener("click", startEditable);
+    elements["editable-refresh"].addEventListener("click", async () => { const session = activeEditable; if (session && !session.busy) { try { await refreshEditablePreview(session); } catch (error) { await failEditable(session, error); } } });
+    elements["editable-commit"].addEventListener("click", () => commitEditable(false));
+    elements["editable-image"].addEventListener("click", () => commitEditable(true));
+    elements["editable-discard"].addEventListener("click", discardEditable);
     elements.preview.addEventListener("click", capturePreview);
     elements["canva-connect"].addEventListener("click", connectCanva);
     elements["canva-design-search-button"].addEventListener("click", loadCanvaDesigns);
@@ -574,7 +827,7 @@
     elements["canva-design-load"].addEventListener("click", captureOAuthDesign);
     elements["import-images"].addEventListener("click", importPageImages);
     elements["cancel-job"].addEventListener("click", cancelJob);
-    elements.close.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "close-plugin" } }, "*"));
+    elements.close.addEventListener("click", () => { if (activeEditable) void discardEditable(); parent.postMessage({ pluginMessage: { type: "close-plugin" } }, "*"); });
     elements["toggle-pages"].addEventListener("click", () => {
       const boxes = [...elements.pages.querySelectorAll('input[type="checkbox"]')];
       const shouldSelect = boxes.some(box => !box.checked);
@@ -584,6 +837,14 @@
     window.onmessage = async event => {
       const message = event.data && event.data.pluginMessage;
       if (!message) return;
+      if (message.type.startsWith("editable-")) {
+        const waiter = editableWaiters.get(message.requestId);
+        if (waiter && waiter.sessionId === message.sessionId) {
+          editableWaiters.delete(message.requestId); window.clearTimeout(waiter.timer);
+          if (message.type === "editable-failed") waiter.reject(new Error(message.message)); else waiter.resolve(message);
+        }
+        return;
+      }
       if (imagePluginWaiter && message.sessionId === imagePluginWaiter.sessionId) {
         if (message.type === imagePluginWaiter.expectedType) {
           const waiter = imagePluginWaiter;

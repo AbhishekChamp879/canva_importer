@@ -1,5 +1,9 @@
 # Architecture
 
+The original capture flow below is retained. Editable import adds a separate job runner: stored capture/page identity → Canva PDF export → isolated PDFium worker → validated scene and PNG assets → chunked plugin transfer → temporary native Figma frame → review and commit. Font AI is an independent, explicit request against a completed scene and is never called during extraction.
+
+`editable_models.py` owns version-1 scene contracts; `editable_jobs.py` owns job lifecycle, resource monitoring, artifacts and optional suggestion caching. `pdf_worker.py` performs extraction and conservative object-isolation checks. `font_ai.py` is the bounded cloud client. See EDITABLE_IMPORT.md for fidelity limits and recovery semantics.
+
 ## Data flow
 
 1. The plugin submits a public Canva URL or a selected OAuth design.

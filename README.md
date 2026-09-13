@@ -2,6 +2,8 @@
 
 Import selected Canva pages into Figma as full-resolution images, with one correctly sized frame per page.
 
+You can also convert one selected page through an official Canva PDF export into editable text, vectors, and image layers. Unsupported content retains its appearance as an image. Optional AI suggests replacement fonts; normal imports do not use AI.
+
 ## Run the backend
 
 Use Python 3.11 or newer. From this project directory in PowerShell:
@@ -26,3 +28,14 @@ The defaults work without an environment file. Copy `.env.example` to `.env` onl
 5. Keep the backend running until import completes. Cancel rolls back frames created by that import.
 
 See the [engineering handbook](docs/README.md) for configuration, supported sources, API contracts, testing, and limitations.
+
+## Import an editable page
+
+1. Install the updated requirements, restart the backend, and reopen the development plugin.
+2. Connect Canva, load a design, and select exactly one page.
+3. Choose **Import editable page**. The connected account must have export access to that design.
+4. Compare the fresh PDF reference with the actual Figma preview. Review the font and image fallback warnings.
+5. Optionally choose a replacement font and select **Update font preview**. **Suggest matching fonts** sends the selected text crop to OpenAI only when clicked; it requires `OPENAI_API_KEY` in the backend environment.
+6. Choose **Import editable result**, or **Import as image** for appearance-only output. Cancel removes the temporary Figma preview.
+
+See [editable import](docs/EDITABLE_IMPORT.md) for supported content, limits, and acceptance status. This cannot guarantee recovery of the original Canva layer structure or every font.

@@ -10,14 +10,16 @@ PLUGIN = ROOT / "figma-plugin"
 
 
 class FigmaPluginContractTests(unittest.TestCase):
-    def test_plugin_has_only_page_image_import(self):
+    def test_plugin_has_pdf_import_without_old_ai_reconstruction(self):
         ui = (PLUGIN / "ui.html").read_text(encoding="utf-8")
         renderer = (PLUGIN / "code.js").read_text(encoding="utf-8")
         self.assertNotIn('id="reconstruct"', ui)
         self.assertNotIn("Make editable", ui)
         self.assertNotIn("reconstruction-jobs", ui)
         self.assertNotIn('"import-design"', renderer)
-        self.assertNotIn("createText", renderer)
+        self.assertIn("createText", renderer)
+        self.assertIn("editable-begin", renderer)
+        self.assertIn("import-editable", ui)
         self.assertNotIn("figma-qa", renderer + ui)
 
     def test_manifest_points_to_existing_runtime_files(self):

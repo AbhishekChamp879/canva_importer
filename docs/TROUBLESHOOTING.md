@@ -1,5 +1,8 @@
 # Troubleshooting
 
+- **Retry Canva setup / OAuth not configured:** the running backend did not load Canva credentials at startup. Keep the real values in the project's `.env`, restart `run.py`, and click **Retry Canva setup**. The button remains usable even if the server was previously unavailable. `.env.example` is documentation, not a loaded configuration file.
+- **Configuration fixed but plugin still looks disconnected:** click the connection control to refresh its status, or reopen the plugin. Retrying a stale disconnected state will not disconnect an account that has since connected.
+
 - **Backend command not found:** install Python 3.11+ or use an available Python executable to create .venv. Then run .venv/Scripts/python.exe directly; activation is optional.
 - **Missing Python module:** install requirements.txt using the same virtual environment used to start run.py.
 - **Converter unavailable:** keep the backend running and open http://127.0.0.1:3000/api/health. The plugin expects localhost:3000.

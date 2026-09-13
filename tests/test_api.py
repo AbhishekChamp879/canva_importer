@@ -82,7 +82,7 @@ class ApiCompatibilityTests(unittest.TestCase):
         self.assertFalse(hasattr(services, "jobs"))
         self.assertFalse(hasattr(services, "ocr"))
         self.assertFalse(hasattr(services, "layout"))
-        self.assertEqual({path.name for path in Path(self.temp.name).iterdir()}, {"captures", "capture-jobs"})
+        self.assertEqual({path.name for path in Path(self.temp.name).iterdir()}, {"captures", "capture-jobs", "editable-jobs"})
 
     def test_removed_conversion_endpoints_are_not_available(self):
         job_id = "11111111-1111-4111-8111-111111111111"

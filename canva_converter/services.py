@@ -12,6 +12,7 @@ from .acquisition import (
 from .config import Settings
 from .capture_jobs import CaptureJobRunner
 from .store import ArtifactStore
+from .editable_jobs import EditableJobs
 
 
 class ServiceContainer:
@@ -24,11 +25,13 @@ class ServiceContainer:
         self.capture_jobs = CaptureJobRunner(
             self.store, self.capture, settings.capture_concurrency, oauth_capture=self.oauth_capture,
         )
+        self.editable_jobs = EditableJobs(settings, self.store, self.canva_api)
         self._shutdown_lock = Lock()
         self._shutdown_complete = False
 
     def start_background_tasks(self) -> None:
         self.store.start_cleanup_worker()
+        self.editable_jobs.start()
 
     def shutdown(self) -> None:
         with self._shutdown_lock:
@@ -37,3 +40,4 @@ class ServiceContainer:
             self._shutdown_complete = True
             self.store.stop_cleanup_worker()
             self.capture_jobs.shutdown()
+            self.editable_jobs.shutdown()

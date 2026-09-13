@@ -4,6 +4,8 @@ This project is a local Flask service and Figma development plugin for importing
 
 Public links use Playwright capture. Optional Canva OAuth uses official PNG exports for fixed-size designs accessible to the connected account. Neither path requires an image-analysis service.
 
+One selected page can also use an official PDF export for editable import. See [EDITABLE_IMPORT.md](EDITABLE_IMPORT.md) for conversion, font suggestions, fallbacks, limits and acceptance status.
+
 ## Documentation
 
 - [Setup and configuration](CONFIGURATION.md)
